@@ -1,0 +1,2848 @@
+#h2_to_h8
+#Lexin Chen Utrecht University
+
+#set working directory
+setwd()#set your own
+
+library(tidyverse)
+library(haven)
+library(dplyr)
+library(psych)
+library(epiDisplay)
+library(foreign)
+library(igraph)
+library(snahelper)
+library(ggplot2)
+library(ggraph)
+library(RSiena)
+library(network)
+
+
+##
+
+fis_orig <- read_dta("dezim_fis_long_c_110.dta")
+
+##
+fis_sub <- fis_orig[which(fis_orig$wave %in% c(1,2,3)),]
+
+
+fis_sub <- fis_sub[,c("id_g","id_p","id_c","wave","c1_coded_group","b4_coded_group","b1_2","b1_3","b2_1","b2_2","b2_3","b2_4",
+                      "c2_2","c2_3","c3_1","c3_2","c3_3","c3_4","c4","c7","c8_1","ed_a6","a7_3_group","a1_0101",
+                      "a1_0102","a1_0103","a1_0104","a1_0105","a1_0106","a1_0107","a1_0108","a1_0109","a1_0110")]
+##b4_coded_group transformed to b4
+fis_sub$b4 <- as.numeric(fis_sub$b4_coded_group)
+fis_sub$c1 <- as.numeric(fis_sub$c1_coded_group)
+
+fis_sub$b1_2 <- ifelse(is.na(fis_sub$b1_2), NA, 6 - fis_sub$b1_2)
+fis_sub$b1_3 <- ifelse(is.na(fis_sub$b1_3), NA, 6 - fis_sub$b1_3)
+fis_sub$b2_1 <- ifelse(is.na(fis_sub$b2_1), NA, 6 - fis_sub$b2_1)
+fis_sub$b2_2 <- ifelse(is.na(fis_sub$b2_2), NA, 6 - fis_sub$b2_2)
+fis_sub$b2_3 <- ifelse(is.na(fis_sub$b2_3), NA, 6 - fis_sub$b2_3)
+fis_sub$b2_4 <- ifelse(is.na(fis_sub$b2_4), NA, 6 - fis_sub$b2_4)
+fis_sub$c2_2 <- ifelse(is.na(fis_sub$c2_2), NA, 6 - fis_sub$c2_2)
+fis_sub$c2_3 <- ifelse(is.na(fis_sub$c2_3), NA, 6 - fis_sub$c2_3)
+fis_sub$c3_1 <- ifelse(is.na(fis_sub$c3_1), NA, 6 - fis_sub$c3_1)
+fis_sub$c3_2 <- ifelse(is.na(fis_sub$c3_2), NA, 6 - fis_sub$c3_2)
+fis_sub$c3_3 <- ifelse(is.na(fis_sub$c3_3), NA, 6 - fis_sub$c3_3)
+fis_sub$c3_4 <- ifelse(is.na(fis_sub$c3_4), NA, 6 - fis_sub$c3_4)
+
+#national identity
+fis_sub$ni <- rowMeans(fis_sub[, c("b1_2", "b1_3", "b2_1", "b2_2", "b2_3", "b2_4")], na.rm = TRUE)
+
+#ethnic identity
+fis_sub$ei <- rowMeans(fis_sub[, c("c2_2", "c2_3", "c3_1", "c3_2", "c3_3", "c3_4")], na.rm = TRUE)
+
+##ethnicity(only minority background)
+fis_sub$ethnicity <- ifelse(is.na(fis_sub$c1)==F,fis_sub$c1,
+                            ifelse(is.na(fis_sub$c1)==T & fis_sub$b4==1,1,NA))
+
+table(fis_sub$ethnicity)
+
+#self-identification
+
+# Assuming your data is in a data frame called fis_sub
+fis_sub$si_g <- ifelse(is.na(fis_sub$ni) | is.na(fis_sub$ei), NA,
+                       ifelse(fis_sub$ni < 2 & fis_sub$ei < 2, "n_i",
+                              ifelse(fis_sub$ni >= 2 & fis_sub$ni <= 3 & fis_sub$ei < 2, "n_i",
+                                     ifelse(fis_sub$ei >= 2 & fis_sub$ei <= 3 & fis_sub$ni < 2, "n_i",
+                                            ifelse(fis_sub$ni >= 2 & fis_sub$ni <= 3 & fis_sub$ei >= 2 & fis_sub$ei <= 3 & fis_sub$c7 %in% c(3,5,7,9), "d_inter",
+                                                   ifelse(fis_sub$ei < 2 & fis_sub$ni > 3, "m_major",
+                                                          ifelse(fis_sub$ni < 2 & fis_sub$ei > 3, "m_minor",
+                                                                 ifelse(fis_sub$ni > 3 & fis_sub$ei > 3 & abs(fis_sub$ni - fis_sub$ei) < 1, "d_comp",
+                                                                        ifelse(fis_sub$ni > fis_sub$ei & abs(fis_sub$ni - fis_sub$ei) >= 1, "d_major",
+                                                                               ifelse(fis_sub$ni < fis_sub$ei & abs(fis_sub$ni - fis_sub$ei) >= 1, "d_minor", NA))))))))))
+
+
+fis_sub$si_g <- ifelse(is.na(fis_sub$si_g)==T & fis_sub$b4==1,"m_major",fis_sub$si_g)
+fis_sub$si_g <- ifelse(fis_sub$ethnicity=="1","m_major",fis_sub$si_g)
+table(fis_sub$si_g, fis_sub$wave)##seems a good quality
+
+table(fis_sub$si_g)
+
+fis_sub$li <- ifelse(fis_sub$si_g=="n_i" | fis_sub$si_g=="d_inter",1,0)
+
+
+#####create dummy variables for siena
+##m_major
+fis_sub$m_major <- ifelse(fis_sub$si_g=="m_major",1,0)
+##m_minor
+fis_sub$m_minor <- ifelse(fis_sub$si_g=="m_minor",1,0)
+##d_major
+fis_sub$d_major <- ifelse(fis_sub$si_g=="d_major",1,0)
+##d_minor
+fis_sub$d_minor <- ifelse(fis_sub$si_g=="d_minor",1,0)
+##d_comp
+fis_sub$d_comp <- ifelse(fis_sub$si_g=="d_comp",1,0)
+##d_inter
+fis_sub$d_inter <- ifelse(fis_sub$si_g=="d_inter",1,0)
+##dual
+fis_sub$dual <- ifelse(fis_sub$si_g %in% c("d_major","d_minor","d_comp","d_inter"),1,0)
+
+
+###
+cols.num <- c("id_p","id_c","wave","ethnicity","ed_a6","a1_0101",
+              "a1_0102","a1_0103","a1_0104","a1_0105","a1_0106","a1_0107",
+              "a1_0108","a1_0109","a1_0110")
+fis_sub[cols.num] <- sapply(fis_sub[cols.num],as.character)
+sapply(fis_sub, class)
+
+
+fm_list <- list()
+name_list <- list()
+for (m in 1:29){
+  
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  #seperate data into respective waves
+  
+  fis_sub_1 <- fis_temp[which(fis_sub$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_sub$wave==2),]
+  fis_sub_3 <- fis_temp[which(fis_sub$wave==3),]
+  
+  #then we make the egde list of three friendship networks
+  #####
+  eg_1 <- data.frame("from" = NA, "to" = NA)
+  for (i in 1:nrow(fis_sub_1)){
+    temp<-fis_sub_1[i,c("id_p","a1_0101", "a1_0102","a1_0103","a1_0104","a1_0105","a1_0106","a1_0107",
+                        "a1_0108","a1_0109","a1_0110")]
+    for (j in 2:11){
+      if (is.na(temp[1,j])==FALSE){
+        temp2 <- data.frame("from" = temp[[1,1]], "to" = temp[[1,j]])
+        eg_1 <- rbind(eg_1, temp2)
+      }
+    }
+  }
+  eg_1 <- eg_1[-1,]
+  
+  #####
+  eg_2 <- data.frame("from" = NA, "to" = NA)
+  for (i in 1:nrow(fis_sub_2)){
+    temp<-fis_sub_2[i,c("id_p","a1_0101", "a1_0102","a1_0103","a1_0104","a1_0105","a1_0106","a1_0107",
+                        "a1_0108","a1_0109","a1_0110")]
+    for (j in 2:11){
+      if (is.na(temp[1,j])==FALSE){
+        temp2 <- data.frame("from" = temp[[1,1]], "to" = temp[[1,j]])
+        eg_2 <- rbind(eg_2, temp2)
+      }
+    }
+  }
+  eg_2 <- eg_2[-1,]
+  
+  #####
+  eg_3 <- data.frame("from" = NA, "to" = NA)
+  for (i in 1:nrow(fis_sub_3)){
+    temp<-fis_sub_3[i,c("id_p","a1_0101", "a1_0102","a1_0103","a1_0104","a1_0105","a1_0106","a1_0107",
+                        "a1_0108","a1_0109","a1_0110")]
+    for (j in 2:11){
+      if (is.na(temp[1,j])==FALSE){
+        temp2 <- data.frame("from" = temp[[1,1]], "to" = temp[[1,j]])
+        eg_3 <- rbind(eg_3, temp2)
+      }
+    }
+  }
+  eg_3 <- eg_3[-1,]
+  
+  g_1 <- graph(t(eg_1),directed=T)
+  g_1<-simplify(g_1)
+  g_2 <- graph(t(eg_2),directed=T)
+  g_2<-simplify(g_2)
+  g_3 <- graph(t(eg_3),directed=T)
+  g_3<-simplify(g_3)
+  
+  name_list_all <- c(V(g_1)$name, V(g_2)$name, V(g_3)$name) ##
+  name_list_all <- unique(name_list_all)
+  name_length <- length(name_list_all)
+  
+  #create friendship matrix for three waves
+  fm_1 <- matrix(0, nrow = length(name_list_all), ncol = length(name_list_all), 
+                 dimnames = list(name_list_all, name_list_all))
+  for (i in 1:nrow(eg_1)){
+    fm_1[eg_1[i,1],eg_1[i,2]] <- 1
+  }
+  
+  
+  fm_2 <- matrix(0, nrow = length(name_list_all), ncol = length(name_list_all), 
+                 dimnames = list(name_list_all, name_list_all))
+  for (i in 1:nrow(eg_2)){
+    fm_2[eg_2[i,1],eg_2[i,2]] <- 1
+  }
+  
+  
+  fm_3 <- matrix(0, nrow = length(name_list_all), ncol = length(name_list_all), 
+                 dimnames = list(name_list_all, name_list_all))
+  for (i in 1:nrow(eg_3)){
+    fm_3[eg_3[i,1],eg_3[i,2]] <- 1
+  }
+  
+  
+  net1 <- sienaDependent(array(c(fm_1, fm_2, fm_3), dim = c(name_length, name_length, 3)))
+  
+  fm_list<-c(fm_list,list(net1))
+  name_list <- c(name_list, list(name_list_all))
+  print(m)
+}
+
+##
+#CONSTANT ACTOR ATTRIBUTES
+#gender
+gender_list <- c()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  gender <- c()
+  for (i in name_list_all){
+    if (i %in% fis_temp$id_p){
+      gender<- append(gender,fis_temp[which(fis_temp$id_p==i),"ed_a6"][[1]][1])
+    }else{
+      gender <- append(gender,NA)
+    }
+  }
+  gender <- as.numeric(gender) ##1 is female
+  gender <- coCovar(gender)
+  gender_list <- c(gender_list, list(gender))
+  print(m)
+}
+
+#class
+class_list <- c()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  class <- c()
+  for (i in name_list_all){
+    if (i %in% fis_temp$id_p){
+      class<- append(class,fis_temp[which(fis_temp$id_p==i),"id_c"][[1]][1])
+    }else{
+      class <- append(class,NA)
+    }
+  }
+  class <- as.numeric(class)
+  class <- coCovar(class)
+  class_list <- c(class_list, list(class))
+  print(m)
+}
+
+#ethnicity
+ethnicity_list <- c()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  ethnicity <- c()
+  for (i in name_list_all){
+    if (i %in% fis_temp$id_p){
+      ethnicity<- append(ethnicity,fis_temp[which(fis_temp$id_p==i),"ethnicity"][[1]][1])
+    }else{
+      ethnicity <- append(ethnicity,NA)
+    }
+  }
+  ethnicity <- as.numeric(ethnicity)
+  ethnicity <- coCovar(ethnicity)
+  ethnicity_list <- c(ethnicity_list, list(ethnicity))
+  print(m)
+}
+
+
+
+#TIME-VARYING ACTOR ATTRIBUTE
+#m_major
+m_major_list <- list()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  m_major <- data.frame(id = name_list_all,
+                        si_1 = NA,
+                        si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (m_major[i,"id"] %in% fis_sub_1$id_p){
+      m_major[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==m_major[i,"id"]),"m_major"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (m_major[i,"id"] %in% fis_sub_2$id_p){
+      m_major[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==m_major[i,"id"]),"m_major"]
+    }
+  }
+  m_major <- as.factor(as.matrix(m_major[,2:3]))
+  dim(m_major)<-c(length(name_list_all),2)
+  m_major <- varCovar(m_major)
+  m_major_list <- c(m_major_list, list(m_major))
+  print(m)
+}
+#m_minor
+m_minor_list <- list()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  m_minor <- data.frame(id = name_list_all,
+                        si_1 = NA,
+                        si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (m_minor[i,"id"] %in% fis_sub_1$id_p){
+      m_minor[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==m_minor[i,"id"]),"m_minor"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (m_minor[i,"id"] %in% fis_sub_2$id_p){
+      m_minor[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==m_minor[i,"id"]),"m_minor"]
+    }
+  }
+  m_minor <- as.factor(as.matrix(m_minor[,2:3]))
+  dim(m_minor)<-c(length(name_list_all),2)
+  m_minor <- varCovar(m_minor)
+  m_minor_list <- c(m_minor_list, list(m_minor))
+  print(m)
+}
+
+#dual
+dual_list <- list()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  dual <- data.frame(id = name_list_all,
+                     si_1 = NA,
+                     si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (dual[i,"id"] %in% fis_sub_1$id_p){
+      dual[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==dual[i,"id"]),"dual"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (dual[i,"id"] %in% fis_sub_2$id_p){
+      dual[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==dual[i,"id"]),"dual"]
+    }
+  }
+  dual <- as.factor(as.matrix(dual[,2:3]))
+  dim(dual)<-c(length(name_list_all),2)
+  dual <- varCovar(dual)
+  dual_list <- c(dual_list, list(dual))
+  print(m)
+}
+
+
+#d_comp
+d_comp_list <- list()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  d_comp <- data.frame(id = name_list_all,
+                       si_1 = NA,
+                       si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (d_comp[i,"id"] %in% fis_sub_1$id_p){
+      d_comp[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==d_comp[i,"id"]),"d_comp"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (d_comp[i,"id"] %in% fis_sub_2$id_p){
+      d_comp[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==d_comp[i,"id"]),"d_comp"]
+    }
+  }
+  d_comp <- as.factor(as.matrix(d_comp[,2:3]))
+  dim(d_comp)<-c(length(name_list_all),2)
+  d_comp <- varCovar(d_comp)
+  d_comp_list <- c(d_comp_list, list(d_comp))
+  print(m)
+}
+
+
+#d_inter
+d_inter_list <- list()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  d_inter <- data.frame(id = name_list_all,
+                        si_1 = NA,
+                        si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (d_inter[i,"id"] %in% fis_sub_1$id_p){
+      d_inter[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==d_inter[i,"id"]),"d_inter"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (d_inter[i,"id"] %in% fis_sub_2$id_p){
+      d_inter[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==d_inter[i,"id"]),"d_inter"]
+    }
+  }
+  d_inter <- as.factor(as.matrix(d_inter[,2:3]))
+  dim(d_inter)<-c(length(name_list_all),2)
+  d_inter <- varCovar(d_inter)
+  d_inter_list <- c(d_inter_list, list(d_inter))
+  print(m)
+}
+
+
+#d_major
+
+d_major_list <- list()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  d_major <- data.frame(id = name_list_all,
+                        si_1 = NA,
+                        si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (d_major[i,"id"] %in% fis_sub_1$id_p){
+      d_major[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==d_major[i,"id"]),"d_major"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (d_major[i,"id"] %in% fis_sub_2$id_p){
+      d_major[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==d_major[i,"id"]),"d_major"]
+    }
+  }
+  d_major <- as.factor(as.matrix(d_major[,2:3]))
+  dim(d_major)<-c(length(name_list_all),2)
+  d_major <- varCovar(d_major)
+  d_major_list <- c(d_major_list, list(d_major))
+  print(m)
+}
+
+#d_minor
+d_minor_list <- list()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  d_minor <- data.frame(id = name_list_all,
+                        si_1 = NA,
+                        si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (d_minor[i,"id"] %in% fis_sub_1$id_p){
+      d_minor[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==d_minor[i,"id"]),"d_minor"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (d_minor[i,"id"] %in% fis_sub_2$id_p){
+      d_minor[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==d_minor[i,"id"]),"d_minor"]
+    }
+  }
+  d_minor <- as.factor(as.matrix(d_minor[,2:3]))
+  dim(d_minor)<-c(length(name_list_all),2)
+  d_minor <- varCovar(d_minor)
+  d_minor_list <- c(d_minor_list, list(d_minor))
+  print(m)
+}
+
+#low-identifier(combine non-identifier and intersection)
+li_list <- list()
+for (m in 1:29){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  li <- data.frame(id = name_list_all,
+                        si_1 = NA,
+                        si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (li[i,"id"] %in% fis_sub_1$id_p){
+      li[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==li[i,"id"]),"li"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (li[i,"id"] %in% fis_sub_2$id_p){
+      li[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==li[i,"id"]),"li"]
+    }
+  }
+  li <- as.factor(as.matrix(li[,2:3]))
+  dim(li)<-c(length(name_list_all),2)
+  li <- varCovar(li)
+  li_list <- c(li_list, list(li))
+  print(m)
+}
+
+###combine data
+alldata_list <- list()
+for (i in 1:29){
+  friend <- fm_list[[i]]
+  gender <- gender_list[[i]]
+  class <- class_list[[i]]
+  ethnicity <- ethnicity_list[[i]]
+  m_major <- m_major_list[[i]]
+  m_minor <- m_minor_list[[i]]
+  dual <- dual_list[[i]]
+  d_major <- d_major_list[[i]]
+  d_minor <- d_minor_list[[i]]
+  d_inter <- d_inter_list[[i]]
+  d_comp <- d_comp_list[[i]]
+  li <- li_list[[i]]
+  
+  thedata <- sienaDataCreate(friend, gender, class,m_major,m_minor,d_major,
+                             d_minor,d_comp,d_inter,dual,ethnicity,li)
+  alldata_list <- c(alldata_list, list(thedata))
+}
+allData <- sienaGroupCreate(alldata_list)
+
+
+
+###SIENA: dual identifiers as a whole group
+
+
+all_results2 <- list()
+
+g1 <- allData[[]]  #please repeat this process manually because SIENA sometimes will be stuck. We tried to run a loop but finally decided to do it grade by grade
+themodel <- getEffects(g1,nintn = 500)
+# ADD EFFECTS TO OBJECTIVE FUNCTION:
+# ADD EFFECTS TO OBJECTIVE FUNCTION:
+themodel <- setEffect(themodel, gwespFF)
+# Add Reciprocity effect
+themodel <- includeEffects(themodel, recip)
+themodel <- includeInteraction(themodel, recip, gwespFF, interaction1 = c("", ""))
+
+# Add Outdegree Activity effect
+themodel <- includeEffects(themodel, outAct)
+
+# Add Indegree Popularity effect
+themodel <- includeEffects(themodel, inPop)
+
+# Add Indegree Activity effect
+themodel <- includeEffects(themodel, inAct)
+
+# Add Gender ego and alter effects
+themodel <- includeEffects(themodel, egoX, altX, sameX, 
+                           interaction1 = "gender")
+themodel <- includeEffects(themodel,
+                           sameX, interaction1='class') # class homophily
+#main effects
+themodel <- includeEffects(themodel,
+                           egoX, interaction1='dual')
+themodel <- includeEffects(themodel,
+                           egoX, interaction1='m_minor') 
+
+
+themodel <- includeEffects(themodel,
+                           altX, interaction1='dual')
+themodel <- includeEffects(themodel,
+                           altX, interaction1='m_minor')
+
+
+themodel <- includeEffects(themodel,
+                           sameX, interaction1='ethnicity') 
+
+themodel <- includeInteraction(themodel,egoX, altX,
+                               interaction1 = c("m_minor","m_minor"))
+themodel <- includeInteraction(themodel,egoX, altX,
+                               interaction1 = c("dual","dual"))
+themodel <- includeInteraction(themodel,egoX, altX,
+                               interaction1 = c("m_minor","dual"))
+themodel <- includeInteraction(themodel,egoX, altX,
+                               interaction1 = c("dual","m_minor"))
+
+themodel <- includeInteraction(themodel,egoX, sameX,
+                               interaction1 = c("m_minor","ethnicity"))
+themodel <- includeInteraction(themodel,altX, sameX, 
+                               interaction1 = c("m_minor","ethnicity"))
+themodel <- includeInteraction(themodel,egoX, sameX,
+                               interaction1 = c("dual","ethnicity"))
+themodel <- includeInteraction(themodel,altX, sameX, 
+                               interaction1 = c("dual","ethnicity"))
+
+#three-way
+
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("m_minor","dual","ethnicity"))
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("m_minor","m_minor","ethnicity"))
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("dual","dual","ethnicity"))
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("dual","m_minor","ethnicity"))
+
+
+# Create RSiena algorithm
+controls <- sienaAlgorithmCreate(seed=12345)
+# seed=12345 : safeguards we all get same randon numbers & hence results
+(theresults2 <- siena07(controls, data=g1, effects=themodel))
+siena.table(theresults2, type="html", tstat=TRUE, sig=TRUE, d=3) #d is decimal, could be set as 3
+browseURL("theresults2.html")
+
+
+all_results2 <- c(all_results2, list(theresults2))
+
+
+all_results2 <- c(all_results2, list(NA)) #2, 4, 20
+
+##meta
+##meta-analysis
+library(mvmeta)
+##exclude irregular and non-converged ones. do it manually with the output and filter well fitted ones
+sub_results <- all_results2[c(1,3,5,7,8,11,13,15,18,22,24,26,27)] #13
+
+get_thetas <- function(model_object) {
+  
+  coef_names <- model_object$effects$effectName
+  
+  cov_matrix <- model_object$covtheta
+  
+  theta_vector <- model_object$theta
+  
+  names(theta_vector) <- coef_names
+  rownames(cov_matrix) <- coef_names
+  colnames(cov_matrix) <- coef_names
+  
+  return(list(theta = theta_vector, cov = cov_matrix))
+}
+
+# siena.models should be a list of your sienaFit objects from the siena07 analysis
+
+corrected_results <- lapply(sub_results, get_thetas) 
+corrected_thetas <-  sapply(corrected_results, function(x) x[[1]]) %>% t()
+corrected_covthetas <-  lapply(corrected_results, function(x) x[[2]]) 
+
+# This estimates the meta-analyses; fixed- or random-effects. Random-effects is preferred.
+analysis_reml <- mvmeta(corrected_thetas,corrected_covthetas,method="reml", control = mvmeta.control(maxiter = 500))
+# adjust the number in maxiter to have the analysis run longer if there are issues with convergence
+reml <- data.frame(name = colnames(corrected_thetas),summary(analysis_reml)$coef[,1:2]) %>% as_tibble() %>% mutate(method = "reml")
+
+
+
+# Extract summary for random-effects (REML)
+reml_summary <- summary(analysis_reml)
+reml_results <- data.frame(
+  name = rownames(reml_summary$coef),
+  Estimate = reml_summary$coef[, 1],
+  `Std. Error` = reml_summary$coef[, 2],
+  `Lower CI` = reml_summary$coef[, 1] - 1.96 * reml_summary$coef[, 2],
+  `Upper CI` = reml_summary$coef[, 1] + 1.96 * reml_summary$coef[, 2],
+  `P-value` = 2 * pnorm(-abs(reml_summary$coef[, 1] / reml_summary$coef[, 2]))
+) %>% 
+  as_tibble() %>%
+  mutate(method = "reml")
+
+#output
+par(family = "serif") #font change as Times New Roman
+library(kableExtra)
+library(htmltools)
+# Create an HTML table using kableExtra
+# Function to convert p-value to stars
+pvalue_to_stars <- function(p) {
+  if (p < 0.001) {
+    return("***")
+  } else if (p < 0.01) {
+    return("**")
+  } else if (p < 0.05) {
+    return("*")
+  } else {
+    return("")
+  }
+}
+
+##random effects
+# Round coefficients and transform p-values
+reml_results <- data.frame(
+  name = rownames(reml_summary$coef),
+  Estimate = round(reml_summary$coef[, 1], 3),
+  `S.E.` = round(reml_summary$coef[, 2], 3),
+  `Lower.CI` = round(reml_summary$coef[, 1] - 1.96 * reml_summary$coef[, 2], 3),
+  `Upper.CI` = round(reml_summary$coef[, 1] + 1.96 * reml_summary$coef[, 2], 3),
+  `P.value` = 2 * pnorm(-abs(reml_summary$coef[, 1] / reml_summary$coef[, 2]))
+) %>% 
+  as_tibble() %>%
+  mutate(method = "reml")
+
+reml_results <- reml_results %>%
+  mutate(
+    Stars = sapply(`P.value`, pvalue_to_stars),
+    Estimates = paste0(Estimate, Stars)
+  ) 
+
+reml_meta <- reml_results[,c("name","Estimates","S.E.","Lower.CI","Upper.CI","method")]
+
+html_table2 <- reml_meta %>%
+  kable(format = "html", digits = 3, caption = "Meta-Analysis Results") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#3c8dbc") %>%
+  column_spec(1, bold = TRUE) %>%
+  column_spec(2, bold = TRUE) %>%
+  column_spec(3, bold = TRUE) %>%
+  column_spec(6, bold = TRUE, background = "#f5f5f5") %>%
+  add_header_above(c(" ", "Estimates" = 1, "Standard Error" = 1, "Confidence Interval" = 2, "Method"))
+
+save_kable(html_table2, file = "reml_meta_analysis.html")
+
+##calculate group preferences through linear combination effects, univariate meta-analysis, and visualizations
+library(metafor)
+library(RSiena)
+
+sub_results <- all_results2[c(1,3,5,7,8,11,13,15,18,22,24,26,27)]#13
+#dual identifiers as a whole
+grade_list <- c(1,3,5,7,8,11,13,15,18,22,24,26,27)
+
+#calculate the weight (mean of dual and minority)
+#dual
+dual_mean_list <- list()
+for (m in grade_list){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  dual <- data.frame(id = name_list_all,
+                     si_1 = NA,
+                     si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (dual[i,"id"] %in% fis_sub_1$id_p){
+      dual[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==dual[i,"id"]),"dual"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (dual[i,"id"] %in% fis_sub_2$id_p){
+      dual[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==dual[i,"id"]),"dual"]
+    }
+  }
+  
+  dual_list <- c(dual$si_1, dual$si_2)
+  dual_mean <- mean(dual_list, na.rm = T)
+  
+  dual_mean_list <- c(dual_mean_list, list(c(dual_mean, dual_list)))
+  print(m)
+}
+#dual_mean_list[[1]][1]
+
+#dual
+minor_mean_list <- list()
+for (m in grade_list){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  minor <- data.frame(id = name_list_all,
+                     si_1 = NA,
+                     si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (minor[i,"id"] %in% fis_sub_1$id_p){
+      minor[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==minor[i,"id"]),"m_minor"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (minor[i,"id"] %in% fis_sub_2$id_p){
+      minor[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==minor[i,"id"]),"m_minor"]
+    }
+  }
+  
+  minor_list <- c(minor$si_1, minor$si_2)
+  minor_mean <- mean(minor_list, na.rm = T)
+  
+  minor_mean_list <- c(minor_mean_list, list(c(minor_mean, minor_list)))
+  print(m)
+}
+#minor_mean_list[[1]][1]
+
+#make a data frame
+weight_df <- data.frame(grade = grade_list,
+                        dual_mean = NA,
+                        minor_mean = NA)
+for (i in 1:length(grade_list)){
+  weight_df[i,"dual_mean"] <- dual_mean_list[[i]][1]
+  weight_df[i,"minor_mean"] <- minor_mean_list[[i]][1]
+}
+
+#now we have all 21 sineafit objects and weight table, we can calculate linear combinations
+#our H2a,b,c require six items, the group preferences of each other
+
+#1. majority's preference to dual: Dual(alter) *(1-mean(dual))
+major_to_dual <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  major_to_dual[i,"estimate"] <- sub_results[[i]]$theta[9] * (1-weight_df[i, "dual_mean"]) #the ninth coefficient is dual(alter)
+  major_to_dual[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[9] * (1-weight_df[i, "dual_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = major_to_dual$estimate, sei = major_to_dual$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result) # we get the scaled meta-analysis result for this preference
+#0.018(0.02)
+# get the estimate of dual alter effect: sub_results[[1]]$theta[9]
+# get the standard error of dual alter effect: sqrt(diag(sub_results[[1]]$covtheta))[9]
+
+#2. majority to minority: Minority(alter) * (1-mean(minority))
+# get the estimate of minority alter effect: sub_results[[1]]$theta[7]
+# get the standard error of minority alter effect: sqrt(diag(sub_results[[1]]$covtheta))[7]
+major_to_minor <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  major_to_minor[i,"estimate"] <- sub_results[[i]]$theta[7] * (1-weight_df[i, "minor_mean"]) 
+  major_to_minor[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[7] * (1-weight_df[i, "minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = major_to_minor$estimate, sei = major_to_minor$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.034(0.058)
+
+#3.dual to majority: Dual(ego) *(1-mean(dual))
+dual_to_major <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  dual_to_major[i,"estimate"] <- sub_results[[i]]$theta[10] * (1-weight_df[i, "dual_mean"]) 
+  dual_to_major[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[10] * (1-weight_df[i, "dual_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dual_to_major$estimate, sei = dual_to_major$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.062(0.038)
+#4.dual to minority of the same ethnicity:
+#a complex one, because we need to calculate the linear combinations for each grade first
+#Same(ethnicity) + Dual(ego)*(1-mean(dual)) + Minority(alter) * (1-mean(minority)) +
+#Dual(ego) * Minority(alter) *(1-mean(dual)) * (1-mean(minority)) + Dual(ego)*same(ethnicity) *(1-mean(dual))
+#Minority(alter) * ethnicity * (1-mean(minority))+ Dual(ego) * Minority(alter)* same(ethnicity) *(1-mean(dual)) * (1-mean(minority))
+
+#create a function to do it:
+linear_combination_siena <- function(sienaFit, names, weights) {
+  # Check inputs
+  if (length(names) != length(weights)) {
+    stop("The length of names and weights must match.")
+  }
+  
+  # Extract coefficients and standard errors from sienaFit object
+  effects_table <- data.frame(
+    name = sienaFit$effects$effectName,
+    coef = sienaFit$theta,
+    se = sienaFit$se
+  )
+  
+  # Filter for the specified coefficients
+  selected_effects <- effects_table[effects_table$name %in% names, ]
+  
+  if (nrow(selected_effects) != length(names)) {
+    stop("Some of the specified names are not found in the sienaFit object.")
+  }
+  
+  # Ensure the order of names matches the order in weights
+  selected_effects <- selected_effects[match(names, selected_effects$name), ]
+  
+  # Extract covariance matrix
+  cov_matrix <- sienaFit$covtheta
+  
+  # Create a weight vector
+  weight_vector <- rep(0, length(sienaFit$theta))
+  weight_vector[match(names, sienaFit$effects$effectName)] <- weights
+  
+  # Calculate the estimate
+  estimate <- sum(weight_vector * sienaFit$theta)
+  
+  # Calculate the standard error
+  var_combination <- t(weight_vector) %*% cov_matrix %*% weight_vector
+  std_error <- sqrt(as.numeric(var_combination))
+  
+  # Return the results
+  return(list(
+    estimate = estimate,
+    std_error = std_error
+  ))
+}
+
+#according to what we need, create names and weights vector
+names_coef <- c("same ethnicity", "dual ego", "m_minor alter", "dual ego x m_minor alter",
+                "dual ego x same ethnicity", "m_minor alter x same ethnicity", "dual ego x m_minor alter x same ethnicity")
+
+dual_to_minor <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "dual_mean"], 1-weight_df[i, "minor_mean"], (1-weight_df[i, "dual_mean"])*(1-weight_df[i, "minor_mean"]),
+               1-weight_df[i, "dual_mean"],1-weight_df[i, "minor_mean"], (1-weight_df[i, "dual_mean"])*(1-weight_df[i, "minor_mean"]))
+  
+  dual_to_minor[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dual_to_minor[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dual_to_minor$estimate, sei = dual_to_minor$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.424***(0.093)
+#5.minority to majority: Minority(ego) * (1-mean(minority))
+minor_to_major <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  minor_to_major[i,"estimate"] <- sub_results[[i]]$theta[8] * (1-weight_df[i, "minor_mean"]) 
+  minor_to_major[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[8] * (1-weight_df[i, "minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = minor_to_major$estimate, sei = minor_to_major$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.096(0.077)
+#6.minority to dual of the same ethnicity
+#Same(ethnicity)  + Minority(ego) * (1-mean(minority)) + Dual(alter) *(1-mean(dual)) + Minority(ego) * Dual(alter) * (1-mean(minority)) *(1-mean(dual))
+#Minority(ego)*ethnicity * (1-mean(minority)) + Dual(alter)*ethnicity *(1-mean(dual))
+#Minor(ego) * dual(alter) * ethnicity * (1-mean(minority)) *(1-mean(dual))
+#according to what we need, create names and weights vector
+names_coef <- c("same ethnicity", "m_minor ego", "dual alter", "m_minor ego x dual alter",
+                "m_minor ego x same ethnicity", "dual alter x same ethnicity", "m_minor ego x dual alter x same ethnicity")
+
+minor_to_dual <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "minor_mean"], 1-weight_df[i, "dual_mean"], (1-weight_df[i, "dual_mean"])*(1-weight_df[i, "minor_mean"]),
+               1-weight_df[i, "minor_mean"],1-weight_df[i, "dual_mean"], (1-weight_df[i, "dual_mean"])*(1-weight_df[i, "minor_mean"]))
+  
+  minor_to_dual[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  minor_to_dual[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = minor_to_dual$estimate, sei = minor_to_dual$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.55***(0.143)
+#now we have all the meta-analysis result, to test hypothesis, let's compare difference
+compare_effects <- function(estimate1, se1, estimate2, se2) {
+  # Step 1: Calculate the difference of the estimates
+  difference <- estimate1 - estimate2
+  
+  # Step 2: Calculate the standard error of the difference
+  se_diff <- sqrt(se1^2 + se2^2)
+  
+  # Step 3: Calculate the z-value
+  z_value <- difference / se_diff
+  
+  # Step 4: Calculate the p-value for a two-tailed test
+  p_value <- 2 * (1 - pnorm(abs(z_value)))  # Two-tailed test
+  
+  # Return the results as a list
+  result <- list(
+    difference = difference,
+    se_diff = se_diff,
+    z_value = z_value,
+    p_value = p_value
+  )
+  
+  return(result)
+}
+
+
+#h2a
+#compare major to dual and major to minor
+h2b <- compare_effects(0.018, 0.02, -0.034, 0.058)#non-significant
+#0.052 (0.061)
+
+#h2b
+#compare minor to dual and minor to major
+h2c <- compare_effects(0.55, 0.143, 0.096, 0.077)#significant
+#0.454**(0.162)
+
+#
+##generate friendship preference plot by group
+# Load required library
+library(ggplot2)
+
+data <- data.frame(
+  group = c("Major->Major","Major->Dual", "Major->Minor", "Dual->Major","Dual->Dual se.", "Dual->Minor se.", "Minor->Major", "Minor->Dual se.","Minor->Minor se."),
+  Estimate = c(0,0.018,-0.034,0.062,0.424,0.381,0.096,0.55,0.979),
+  SE = c(0,0.02,0.058,0.038,0.093,0.085,0.077,0.143,0.224)
+)
+
+# Set the group as a factor with the desired order
+data$group <- factor(data$group, levels = c("Major->Major","Major->Dual", "Major->Minor", "Dual->Major","Dual->Dual se.", "Dual->Minor se.", "Minor->Major", "Minor->Dual se.","Minor->Minor se."))
+
+# Calculate confidence intervals
+data$Lower_CI <- data$Estimate - 1.96 * data$SE
+data$Upper_CI <- data$Estimate + 1.96 * data$SE
+
+par(family = "serif") #font change as Times New Roman
+# Create the plot
+
+# Create the plot
+library(ggplot2)
+
+ggplot(data, aes(x = group, y = Estimate)) +
+  geom_pointrange(aes(ymin = Lower_CI, ymax = Upper_CI), 
+                  position = position_dodge(width = 0.3), 
+                  size = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  theme_minimal() +
+  labs(
+    title = "Group Friendship Preferences",
+    x = NULL,
+    y = "Predicted values"
+  ) +
+  theme(
+    text = element_text(family = "serif", size = 12),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12, angle = 45, hjust = 1), # Rotate x-axis labels for readability
+    plot.title = element_text(hjust = 0.5, size = 16) # Centers title and adjusts font size
+)
+
+##generate preference difference plot
+
+data <- data.frame(
+  group = c( "H2a:Major->Dual vs. Major->Minor", "H2b:Minor->Dual vs. Minor-Major"),
+  Estimate = c( 0.052, 0.454),
+  SE = c(0.061, 0.162)
+)
+# Set the group as a factor with the desired order
+data$group <- factor(data$group, levels = c( "H2a:Major->Dual vs. Major->Minor", "H2b:Minor->Dual vs. Minor-Major"))
+
+# Calculate confidence intervals
+data$Lower_CI <- data$Estimate - 1.96 * data$SE
+data$Upper_CI <- data$Estimate + 1.96 * data$SE
+
+par(family = "serif") #font change as Times New Roman
+# Create the plot
+
+# Create the plot
+library(ggplot2)
+
+ggplot(data, aes(x = group, y = Estimate)) +
+  geom_pointrange(aes(ymin = Lower_CI, ymax = Upper_CI), 
+                  position = position_dodge(width = 0.3), 
+                  size = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  theme_minimal() +
+  labs(
+    title = "Comparing Friendship Preferences H2a&2b",
+    x = NULL,
+    y = "Predicted difference"
+  ) +
+  theme(
+    text = element_text(family = "serif", size = 12),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 10, hjust = 0.5), # Rotate x-axis labels for readability
+    plot.title = element_text(hjust = 0.5, size = 16) # Centers title and adjusts font size
+  )
+
+##other calculations
+#univariate meta-analysis for gender alter and ego effects
+#gender
+gender_mean_list <- list()
+for (m in grade_list){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  gender <- data.frame(id = name_list_all,
+                     si_1 = NA,
+                     si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (gender[i,"id"] %in% fis_sub_1$id_p){
+      gender[i,"si_1"] <- as.numeric(fis_sub_1[which(fis_sub_1$id_p==gender[i,"id"]),"ed_a6"])
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (gender[i,"id"] %in% fis_sub_2$id_p){
+      gender[i,"si_2"] <- as.numeric(fis_sub_2[which(fis_sub_2$id_p==gender[i,"id"]),"ed_a6"])
+    }
+  }
+  
+  gender_list <- c(gender$si_1, gender$si_2)
+  gender_mean <- mean(gender_list, na.rm = T)
+  
+  gender_mean_list <- c(gender_mean_list, list(c(gender_mean, gender_list)))
+  print(m)
+}
+weight_df$gender_mean <- rep(NA,13)
+for (i in 1:length(grade_list)){
+  weight_df[i,"gender_mean"] <- gender_mean_list[[i]][1]
+}
+#gender alter
+gender_alter <- data.frame(grade = grade_list,
+                             estimate = NA,
+                             ste = NA)
+for (i in 1:length(grade_list)){
+  gender_alter[i,"estimate"] <- sub_results[[i]]$theta[11] * (1-weight_df[i, "gender_mean"]) 
+  gender_alter[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[11] * abs(1-weight_df[i, "gender_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = gender_alter$estimate, sei = gender_alter$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.009(0.011) 
+
+#gender ego
+gender_ego <- data.frame(grade = grade_list,
+                           estimate = NA,
+                           ste = NA)
+for (i in 1:length(grade_list)){
+  gender_ego[i,"estimate"] <- sub_results[[i]]$theta[12] * (1-weight_df[i, "gender_mean"]) 
+  gender_ego[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[12] * abs(1-weight_df[i, "gender_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = gender_ego$estimate, sei = gender_ego$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.022(0.011) p=0.0517
+
+#m_minor ego x m_minor alter
+me_ma <- data.frame(grade = grade_list,
+                         estimate = NA,
+                         ste = NA)
+for (i in 1:length(grade_list)){
+  me_ma[i,"estimate"] <- sub_results[[i]]$theta[17] * (1-weight_df[i, "minor_mean"]) * (1-weight_df[i, "minor_mean"])
+  me_ma[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[17] * abs(1-weight_df[i, "minor_mean"])* abs(1-weight_df[i, "minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = me_ma$estimate, sei = me_ma$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.101(0.153) 
+
+#dual ego x dual alter
+de_da <- data.frame(grade = grade_list,
+                    estimate = NA,
+                    ste = NA)
+for (i in 1:length(grade_list)){
+  de_da[i,"estimate"] <- sub_results[[i]]$theta[18] * (1-weight_df[i, "dual_mean"]) * (1-weight_df[i, "dual_mean"])
+  de_da[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[18] * abs(1-weight_df[i, "dual_mean"])* abs(1-weight_df[i, "dual_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = de_da$estimate, sei = de_da$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.001(0.03)
+
+#m_minor ego x dual alter
+me_da <- data.frame(grade = grade_list,
+                    estimate = NA,
+                    ste = NA)
+for (i in 1:length(grade_list)){
+  me_da[i,"estimate"] <- sub_results[[i]]$theta[19] * (1-weight_df[i, "minor_mean"]) * (1-weight_df[i, "dual_mean"])
+  me_da[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[19] * abs(1-weight_df[i, "minor_mean"])* abs(1-weight_df[i, "dual_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = me_da$estimate, sei = me_da$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.047(0.069)
+
+#dual ego x m_minor alter
+de_ma <- data.frame(grade = grade_list,
+                    estimate = NA,
+                    ste = NA)
+for (i in 1:length(grade_list)){
+  de_ma[i,"estimate"] <- sub_results[[i]]$theta[20] * (1-weight_df[i, "minor_mean"]) * (1-weight_df[i, "dual_mean"])
+  de_ma[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[20] * abs(1-weight_df[i, "minor_mean"])* abs(1-weight_df[i, "dual_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = de_ma$estimate, sei = de_ma$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.037(0.074)
+
+#m_minor ego x same ethnicity
+me_se <- data.frame(grade = grade_list,
+                    estimate = NA,
+                    ste = NA)
+for (i in 1:length(grade_list)){
+  me_se[i,"estimate"] <- sub_results[[i]]$theta[21] * (1-weight_df[i, "minor_mean"])
+  me_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[21] * abs(1-weight_df[i, "minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = me_se$estimate, sei = me_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.139(0.098)
+
+#m_minor alter x same ethnicity
+ma_se <- data.frame(grade = grade_list,
+                    estimate = NA,
+                    ste = NA)
+for (i in 1:length(grade_list)){
+  ma_se[i,"estimate"] <- sub_results[[i]]$theta[22] * (1-weight_df[i, "minor_mean"])
+  ma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[22] * abs(1-weight_df[i, "minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = ma_se$estimate, sei = ma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.083(0.099)
+
+#dual ego x same ethnicity
+de_se <- data.frame(grade = grade_list,
+                    estimate = NA,
+                    ste = NA)
+for (i in 1:length(grade_list)){
+  de_se[i,"estimate"] <- sub_results[[i]]$theta[23] * (1-weight_df[i, "dual_mean"])
+  de_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[23] * abs(1-weight_df[i, "dual_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = de_se$estimate, sei = de_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.066(0.034) .
+
+#dual alter x same ethnicity
+da_se <- data.frame(grade = grade_list,
+                    estimate = NA,
+                    ste = NA)
+for (i in 1:length(grade_list)){
+  da_se[i,"estimate"] <- sub_results[[i]]$theta[24] * (1-weight_df[i, "dual_mean"])
+  da_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[24] * abs(1-weight_df[i, "dual_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = da_se$estimate, sei = da_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.038(0.045)
+
+#m_minor ego x dual alter x same ethnicity
+me_da_se <- data.frame(grade = grade_list,
+                    estimate = NA,
+                    ste = NA)
+for (i in 1:length(grade_list)){
+  me_da_se[i,"estimate"] <- sub_results[[i]]$theta[25] * (1-weight_df[i, "minor_mean"]) * (1-weight_df[i, "dual_mean"])
+  me_da_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[25] * abs(1-weight_df[i, "minor_mean"])* abs(1-weight_df[i, "dual_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = me_da_se$estimate, sei = me_da_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.192(0.11).
+
+#m_minor ego x m_minor alter x same ethnicity
+me_ma_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  me_ma_se[i,"estimate"] <- sub_results[[i]]$theta[26] * (1-weight_df[i, "minor_mean"]) * (1-weight_df[i, "minor_mean"])
+  me_ma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[26] * abs(1-weight_df[i, "minor_mean"])* abs(1-weight_df[i, "minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = me_ma_se$estimate, sei = me_ma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.389(0.31)
+
+#dual ego x dual alter x same ethnicity
+de_da_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  de_da_se[i,"estimate"] <- sub_results[[i]]$theta[27] * (1-weight_df[i, "dual_mean"]) * (1-weight_df[i, "dual_mean"])
+  de_da_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[27] * abs(1-weight_df[i, "dual_mean"])* abs(1-weight_df[i, "dual_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = de_da_se$estimate, sei = de_da_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.097(0.031)**
+
+#dual ego x m_minor alter x same ethnicity
+de_ma_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  de_ma_se[i,"estimate"] <- sub_results[[i]]$theta[28] * (1-weight_df[i, "minor_mean"]) * (1-weight_df[i, "dual_mean"])
+  de_ma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[28] * abs(1-weight_df[i, "minor_mean"])* abs(1-weight_df[i, "dual_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = de_ma_se$estimate, sei = de_ma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.231*(0.112)
+
+#dual -> dual of the same ethnicity
+#same ethnicity + dual ego + dual alter + dual ego x same ethnicity + dual alter x same ethnicity
+# + dual ego x dual alter x same ethnicity
+names_coef <- c("same ethnicity", "dual ego", "dual alter", "dual ego x dual alter",
+                "dual ego x same ethnicity", "dual alter x same ethnicity", "dual ego x dual alter x same ethnicity")
+
+dual_to_dual <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "dual_mean"], 1-weight_df[i, "dual_mean"], (1-weight_df[i, "dual_mean"])*(1-weight_df[i, "dual_mean"]),
+               1-weight_df[i, "dual_mean"],1-weight_df[i, "dual_mean"], (1-weight_df[i, "dual_mean"])*(1-weight_df[i, "dual_mean"]))
+  
+  dual_to_dual[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dual_to_dual[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dual_to_dual$estimate, sei = dual_to_dual$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.381(0.085)***
+
+#minor -> minor of the same ethnicity
+names_coef <- c("same ethnicity", "m_minor ego", "m_minor alter", "m_minor ego x m_minor alter",
+                "m_minor ego x same ethnicity", "m_minor alter x same ethnicity", "m_minor ego x m_minor alter x same ethnicity")
+
+minor_to_minor <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "minor_mean"], 1-weight_df[i, "minor_mean"], (1-weight_df[i, "minor_mean"])*(1-weight_df[i, "minor_mean"]),
+               1-weight_df[i, "minor_mean"],1-weight_df[i, "minor_mean"], (1-weight_df[i, "minor_mean"])*(1-weight_df[i, "minor_mean"]))
+  
+  minor_to_minor[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  minor_to_minor[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = minor_to_minor$estimate, sei = minor_to_minor$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.979***(0.224)
+
+#then we can generate the meta-analysis output of the SIENA model
+#let me explain: we centered all variables for SIENA so we cannot simply conduct a meta-analysis for them. 
+#We scale each model and do linear combinations, and conduct a univariate meta-analysis for each SIENA effect.
+
+
+
+###SIENA: classifying dual identifiers into four types
+##set majority as reference group
+all_results3 <- list()
+
+g1 <- allData[[29]]
+themodel <- getEffects(g1,nintn = 500)
+# ADD EFFECTS TO OBJECTIVE FUNCTION:
+# ADD EFFECTS TO OBJECTIVE FUNCTION:
+themodel <- setEffect(themodel, gwespFF)
+# Add Reciprocity effect
+themodel <- includeEffects(themodel, recip)
+themodel <- includeInteraction(themodel, recip, gwespFF, interaction1 = c("", ""))
+
+# Add Outdegree Activity effect
+themodel <- includeEffects(themodel, outAct)
+
+# Add Indegree Popularity effect
+themodel <- includeEffects(themodel, inPop)
+
+# Add Indegree Activity effect
+themodel <- includeEffects(themodel, inAct)
+
+# Add Gender ego and alter effects
+themodel <- includeEffects(themodel, egoX, altX, sameX, 
+                           interaction1 = "gender")
+themodel <- includeEffects(themodel,
+                           sameX, interaction1='class') # class homophily
+
+### MAIN EFFECTS ###
+# Ego effects for group membership
+themodel <- includeEffects(themodel, egoX, interaction1 = "d_minor")  # Minority
+themodel <- includeEffects(themodel, egoX, interaction1 = "d_comp")     # d_comp
+themodel <- includeEffects(themodel, egoX, interaction1 = "m_minor")    # m_minor
+
+
+# Alter effects for group membership
+themodel <- includeEffects(themodel, altX, interaction1 = "d_minor")  # 
+themodel <- includeEffects(themodel, altX, interaction1 = "d_comp")  # 
+themodel <- includeEffects(themodel, altX, interaction1 = "m_minor")     # 
+
+
+# Same ethnicity preference (general)
+themodel <- includeEffects(themodel, sameX, interaction1 = "ethnicity")
+
+### INTERACTIONS ###
+
+themodel <- includeInteraction(themodel, egoX, altX, interaction1 = c("m_minor", "m_minor"))
+themodel <- includeInteraction(themodel, egoX, altX, interaction1 = c("m_minor", "d_comp"))
+themodel <- includeInteraction(themodel, egoX, sameX, interaction1 = c("m_minor", "ethnicity"))
+themodel <- includeInteraction(themodel, altX, sameX, interaction1 = c("m_minor", "ethnicity"))
+themodel <- includeInteraction(themodel, egoX, altX, interaction1 = c("m_minor", "d_minor"))
+themodel <- includeInteraction(themodel, altX, sameX, interaction1 = c("d_minor", "ethnicity"))
+themodel <- includeInteraction(themodel, egoX, altX, interaction1 = c("d_minor", "d_comp"))
+themodel <- includeInteraction(themodel, egoX, sameX, interaction1 = c("d_minor", "ethnicity"))
+themodel <- includeInteraction(themodel, altX, sameX, interaction1 = c("d_comp", "ethnicity"))
+themodel <- includeInteraction(themodel, egoX, altX, interaction1 = c("d_minor", "d_minor"))
+themodel <- includeInteraction(themodel, egoX, altX, interaction1 = c("d_minor", "m_minor"))
+themodel <- includeInteraction(themodel, egoX, altX, interaction1 = c("d_comp", "d_comp"))
+themodel <- includeInteraction(themodel, egoX, sameX, interaction1 = c("d_comp", "ethnicity"))
+themodel <- includeInteraction(themodel, egoX, altX, interaction1 = c("d_comp", "d_minor"))
+themodel <- includeInteraction(themodel, egoX, altX, interaction1 = c("d_comp", "m_minor"))
+
+#h5
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("d_minor","d_comp","ethnicity"))
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("d_minor","d_minor","ethnicity"))
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("d_minor","m_minor","ethnicity"))
+
+#h6
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("d_comp","d_comp","ethnicity"))
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("d_comp","d_minor","ethnicity"))
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("d_comp","m_minor","ethnicity"))
+
+#h8
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("m_minor","m_minor","ethnicity"))
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("m_minor","d_minor","ethnicity"))
+themodel <- includeInteraction(themodel,egoX, altX, sameX,
+                               interaction1 = c("m_minor","d_comp","ethnicity"))
+
+
+# Create RSiena algorithm
+controls <- sienaAlgorithmCreate(seed=12345)
+# seed=12345 : safeguards we all get same randon numbers & hence results
+(theresults2 <- siena07(controls, data=g1, effects=themodel))
+siena.table(theresults2, type="html", tstat=TRUE, sig=TRUE, d=3) #d is decimal, could be set as 3
+browseURL("theresults2.html")
+
+all_results3 <- c(all_results3, list(theresults2))
+all_results3 <- c(all_results3, list(NA)) #2, 20,29
+
+library(mvmeta)
+##exclude irregular and non-converged ones
+sub_results <- all_results3[c(1,3,7,8,11,13,15,18,22,23,24,26,27)]
+
+get_thetas <- function(model_object) {
+  
+  coef_names <- model_object$effects$effectName
+  
+  cov_matrix <- model_object$covtheta
+  
+  theta_vector <- model_object$theta
+  
+  names(theta_vector) <- coef_names
+  rownames(cov_matrix) <- coef_names
+  colnames(cov_matrix) <- coef_names
+  
+  return(list(theta = theta_vector, cov = cov_matrix))
+}
+
+# siena.models should be a list of your sienaFit objects from the siena07 analysis
+
+corrected_results <- lapply(sub_results, get_thetas) 
+corrected_thetas <-  sapply(corrected_results, function(x) x[[1]]) %>% t()
+corrected_covthetas <-  lapply(corrected_results, function(x) x[[2]]) 
+
+# This estimates the meta-analyses; fixed- or random-effects. Random-effects is preferred.
+analysis_reml <- mvmeta(corrected_thetas,corrected_covthetas,method="reml", control = mvmeta.control(maxiter = 500))
+# adjust the number in maxiter to have the analysis run longer if there are issues with convergence
+reml <- data.frame(name = colnames(corrected_thetas),summary(analysis_reml)$coef[,1:2]) %>% as_tibble() %>% mutate(method = "reml")
+
+
+
+# Extract summary for random-effects (REML)
+reml_summary <- summary(analysis_reml)
+reml_results <- data.frame(
+  name = rownames(reml_summary$coef),
+  Estimate = reml_summary$coef[, 1],
+  `Std. Error` = reml_summary$coef[, 2],
+  `Lower CI` = reml_summary$coef[, 1] - 1.96 * reml_summary$coef[, 2],
+  `Upper CI` = reml_summary$coef[, 1] + 1.96 * reml_summary$coef[, 2],
+  `P-value` = 2 * pnorm(-abs(reml_summary$coef[, 1] / reml_summary$coef[, 2]))
+) %>% 
+  as_tibble() %>%
+  mutate(method = "reml")
+
+#output
+par(family = "serif") #font change as Times New Roman
+library(kableExtra)
+library(htmltools)
+# Create an HTML table using kableExtra
+# Function to convert p-value to stars
+pvalue_to_stars <- function(p) {
+  if (p < 0.001) {
+    return("***")
+  } else if (p < 0.01) {
+    return("**")
+  } else if (p < 0.05) {
+    return("*")
+  } else {
+    return("")
+  }
+}
+
+##random effects
+# Round coefficients and transform p-values
+reml_results <- data.frame(
+  name = rownames(reml_summary$coef),
+  Estimate = round(reml_summary$coef[, 1], 3),
+  `S.E.` = round(reml_summary$coef[, 2], 3),
+  `Lower.CI` = round(reml_summary$coef[, 1] - 1.96 * reml_summary$coef[, 2], 3),
+  `Upper.CI` = round(reml_summary$coef[, 1] + 1.96 * reml_summary$coef[, 2], 3),
+  `P.value` = 2 * pnorm(-abs(reml_summary$coef[, 1] / reml_summary$coef[, 2]))
+) %>% 
+  as_tibble() %>%
+  mutate(method = "reml")
+
+reml_results <- reml_results %>%
+  mutate(
+    Stars = sapply(`P.value`, pvalue_to_stars),
+    Estimates = paste0(Estimate, Stars)
+  ) 
+
+reml_meta <- reml_results[,c("name","Estimates","S.E.","Lower.CI","Upper.CI","method")]
+
+html_table2 <- reml_meta %>%
+  kable(format = "html", digits = 3, caption = "Meta-Analysis Results") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                full_width = FALSE, position = "center") %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#3c8dbc") %>%
+  column_spec(1, bold = TRUE) %>%
+  column_spec(2, bold = TRUE) %>%
+  column_spec(3, bold = TRUE) %>%
+  column_spec(6, bold = TRUE, background = "#f5f5f5") %>%
+  add_header_above(c(" ", "Estimates" = 1, "Standard Error" = 1, "Confidence Interval" = 2, "Method"))
+
+save_kable(html_table2, file = "reml_meta_analysis.html") # we calculate this just because there are some effects that do not need to be scaled. So many effects would be replaced by results of univariate meta-analyeses.
+
+#first we load stored workspace so to have all siena fit objects of converged datasets
+
+library(metafor)
+library(RSiena)
+
+sub_results <- all_results3[c(1,3,7,8,11,13,15,18,22,23,24,26,27)] #13
+#dual identifiers as a whole
+grade_list <- c(1,3,7,8,11,13,15,18,22,23,24,26,27)
+
+#calculate the weight (mean of d_comp, d_minor, m_minor, gender)
+#d_comp
+d_comp_mean_list <- list()
+for (m in grade_list){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  d_comp <- data.frame(id = name_list_all,
+                     si_1 = NA,
+                     si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (d_comp[i,"id"] %in% fis_sub_1$id_p){
+      d_comp[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==d_comp[i,"id"]),"d_comp"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (d_comp[i,"id"] %in% fis_sub_2$id_p){
+      d_comp[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==d_comp[i,"id"]),"d_comp"]
+    }
+  }
+  
+  d_comp_list <- c(d_comp$si_1, d_comp$si_2)
+  d_comp_mean <- mean(d_comp_list, na.rm = T)
+  
+  d_comp_mean_list <- c(d_comp_mean_list, list(c(d_comp_mean, d_comp_list)))
+  print(m)
+}
+#d_comp_mean_list[[1]][1]
+
+#d_minor
+d_minor_mean_list <- list()
+for (m in grade_list){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  d_minor <- data.frame(id = name_list_all,
+                      si_1 = NA,
+                      si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (d_minor[i,"id"] %in% fis_sub_1$id_p){
+      d_minor[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==d_minor[i,"id"]),"d_minor"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (d_minor[i,"id"] %in% fis_sub_2$id_p){
+      d_minor[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==d_minor[i,"id"]),"d_minor"]
+    }
+  }
+  
+  d_minor_list <- c(d_minor$si_1, d_minor$si_2)
+  d_minor_mean <- mean(d_minor_list, na.rm = T)
+  
+  d_minor_mean_list <- c(d_minor_mean_list, list(c(d_minor_mean, d_minor_list)))
+  print(m)
+}
+#d_minor_mean_list[[1]][1]
+
+#m_minor
+m_minor_mean_list <- list()
+for (m in grade_list){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  m_minor <- data.frame(id = name_list_all,
+                        si_1 = NA,
+                        si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (m_minor[i,"id"] %in% fis_sub_1$id_p){
+      m_minor[i,"si_1"] <- fis_sub_1[which(fis_sub_1$id_p==m_minor[i,"id"]),"m_minor"]
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (m_minor[i,"id"] %in% fis_sub_2$id_p){
+      m_minor[i,"si_2"] <- fis_sub_2[which(fis_sub_2$id_p==m_minor[i,"id"]),"m_minor"]
+    }
+  }
+  
+  m_minor_list <- c(m_minor$si_1, m_minor$si_2)
+  m_minor_mean <- mean(m_minor_list, na.rm = T)
+  
+  m_minor_mean_list <- c(m_minor_mean_list, list(c(m_minor_mean, m_minor_list)))
+  print(m)
+}
+#m_minor_mean_list[[1]][1]
+
+gender_mean_list <- list()
+for (m in grade_list){
+  name_list_all <- name_list[[m]]
+  fis_temp <- fis_sub[which(fis_sub$id_g==m),]
+  
+  fis_sub_1 <- fis_temp[which(fis_temp$wave==1),]
+  fis_sub_2 <- fis_temp[which(fis_temp$wave==2),]
+  
+  gender <- data.frame(id = name_list_all,
+                       si_1 = NA,
+                       si_2 = NA)
+  for (i in 1:length(name_list_all)){
+    if (gender[i,"id"] %in% fis_sub_1$id_p){
+      gender[i,"si_1"] <- as.numeric(fis_sub_1[which(fis_sub_1$id_p==gender[i,"id"]),"ed_a6"])
+    }
+  }
+  for (i in 1:length(name_list_all)){
+    if (gender[i,"id"] %in% fis_sub_2$id_p){
+      gender[i,"si_2"] <- as.numeric(fis_sub_2[which(fis_sub_2$id_p==gender[i,"id"]),"ed_a6"])
+    }
+  }
+  
+  gender_list <- c(gender$si_1, gender$si_2)
+  gender_mean <- mean(gender_list, na.rm = T)
+  
+  gender_mean_list <- c(gender_mean_list, list(c(gender_mean, gender_list)))
+  print(m)
+}
+
+
+#make a data frame
+weight_df <- data.frame(grade = grade_list,
+                        d_comp_mean = NA,
+                        d_minor_mean = NA,
+                        m_minor_mean = NA,
+                        gender_mean = NA)
+for (i in 1:length(grade_list)){
+  weight_df[i,"d_comp_mean"] <- d_comp_mean_list[[i]][1]
+  weight_df[i,"d_minor_mean"] <- d_minor_mean_list[[i]][1]
+  weight_df[i,"m_minor_mean"] <- m_minor_mean_list[[i]][1]
+  weight_df[i,"gender_mean"] <- gender_mean_list[[i]][1]
+}
+
+#now we have all 13 sineafit objects and weight table, we can calculate linear combinations
+#m_minor alter
+m_minor_alter <- data.frame(grade = grade_list,
+                             estimate = NA,
+                             ste = NA)
+for (i in 1:length(grade_list)){
+  m_minor_alter[i,"estimate"] <- sub_results[[i]]$theta[7] * (1-weight_df[i, "m_minor_mean"]) 
+  m_minor_alter[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[7] * (1-weight_df[i, "m_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = m_minor_alter$estimate, sei = m_minor_alter$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.004(0.052)
+
+#m_minor ego
+m_minor_ego <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  m_minor_ego[i,"estimate"] <- sub_results[[i]]$theta[8] * (1-weight_df[i, "m_minor_mean"]) 
+  m_minor_ego[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[8] * (1-weight_df[i, "m_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = m_minor_ego$estimate, sei = m_minor_ego$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.053(0.077)
+
+#d_minor alter
+d_minor_alter <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  d_minor_alter[i,"estimate"] <- sub_results[[i]]$theta[9] * (1-weight_df[i, "d_minor_mean"]) 
+  d_minor_alter[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[9] * (1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = d_minor_alter$estimate, sei = d_minor_alter$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.023(0.035)
+
+#d_minor ego
+d_minor_ego <- data.frame(grade = grade_list,
+                          estimate = NA,
+                          ste = NA)
+for (i in 1:length(grade_list)){
+  d_minor_ego[i,"estimate"] <- sub_results[[i]]$theta[10] * (1-weight_df[i, "d_minor_mean"]) 
+  d_minor_ego[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[10] * (1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = d_minor_ego$estimate, sei = d_minor_ego$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.06(0.053)
+
+#d_comp alter
+d_comp_alter <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  d_comp_alter[i,"estimate"] <- sub_results[[i]]$theta[11] * (1-weight_df[i, "d_comp_mean"]) 
+  d_comp_alter[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[11] * (1-weight_df[i, "d_comp_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = d_comp_alter$estimate, sei = d_comp_alter$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.064(0.037)
+
+#d_comp ego
+d_comp_ego <- data.frame(grade = grade_list,
+                          estimate = NA,
+                          ste = NA)
+for (i in 1:length(grade_list)){
+  d_comp_ego[i,"estimate"] <- sub_results[[i]]$theta[12] * (1-weight_df[i, "d_comp_mean"]) 
+  d_comp_ego[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[12] * (1-weight_df[i, "d_comp_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = d_comp_ego$estimate, sei = d_comp_ego$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.1(0.069)
+
+#gender alter
+gender_alter <- data.frame(grade = grade_list,
+                           estimate = NA,
+                           ste = NA)
+for (i in 1:length(grade_list)){
+  gender_alter[i,"estimate"] <- sub_results[[i]]$theta[13] * (1-weight_df[i, "gender_mean"]) 
+  gender_alter[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[13] * abs(1-weight_df[i, "gender_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = gender_alter$estimate, sei = gender_alter$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.01(0.011)
+
+#gender ego
+gender_ego <- data.frame(grade = grade_list,
+                         estimate = NA,
+                         ste = NA)
+for (i in 1:length(grade_list)){
+  gender_ego[i,"estimate"] <- sub_results[[i]]$theta[14] * (1-weight_df[i, "gender_mean"]) 
+  gender_ego[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[14] * abs(1-weight_df[i, "gender_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = gender_ego$estimate, sei = gender_ego$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.023(0.011) p=0.0375
+
+#m_minor ego x m_minor alter
+mme_mma <- data.frame(grade = grade_list,
+                    estimate = NA,
+                    ste = NA)
+for (i in 1:length(grade_list)){
+  mme_mma[i,"estimate"] <- sub_results[[i]]$theta[19] * (1-weight_df[i, "m_minor_mean"]) * (1-weight_df[i, "m_minor_mean"])
+  mme_mma[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[19] * abs(1-weight_df[i, "m_minor_mean"])* abs(1-weight_df[i, "m_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mme_mma$estimate, sei = mme_mma$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.072(0.16)
+
+#m_minor ego x d_comp alter
+mme_dca <- data.frame(grade = grade_list,
+                      estimate = NA,
+                      ste = NA)
+for (i in 1:length(grade_list)){
+  mme_dca[i,"estimate"] <- sub_results[[i]]$theta[20] * (1-weight_df[i, "m_minor_mean"]) * (1-weight_df[i, "d_comp_mean"])
+  mme_dca[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[20] * abs(1-weight_df[i, "m_minor_mean"])* abs(1-weight_df[i, "d_comp_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mme_dca$estimate, sei = mme_dca$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.129(0.144)
+
+#m_minor ego x same ethnicity
+mme_se <- data.frame(grade = grade_list,
+                      estimate = NA,
+                      ste = NA)
+for (i in 1:length(grade_list)){
+  mme_se[i,"estimate"] <- sub_results[[i]]$theta[21] * (1-weight_df[i, "m_minor_mean"])
+  mme_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[21] * abs(1-weight_df[i, "m_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mme_se$estimate, sei = mme_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.101(0.104)
+
+#m_minor alter x same ethnicity
+mma_se <- data.frame(grade = grade_list,
+                     estimate = NA,
+                     ste = NA)
+for (i in 1:length(grade_list)){
+  mma_se[i,"estimate"] <- sub_results[[i]]$theta[22] * (1-weight_df[i, "m_minor_mean"])
+  mma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[22] * abs(1-weight_df[i, "m_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mma_se$estimate, sei = mma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.031(0.102)
+
+#m_minor ego x d_minor alter
+mme_dma <- data.frame(grade = grade_list,
+                      estimate = NA,
+                      ste = NA)
+for (i in 1:length(grade_list)){
+  mme_dma[i,"estimate"] <- sub_results[[i]]$theta[23] * (1-weight_df[i, "m_minor_mean"]) * (1-weight_df[i, "d_minor_mean"])
+  mme_dma[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[23] * abs(1-weight_df[i, "m_minor_mean"])* abs(1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mme_dma$estimate, sei = mme_dma$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.001(0.125)
+
+#d_minor alter x same ethnicity
+dma_se <- data.frame(grade = grade_list,
+                     estimate = NA,
+                     ste = NA)
+for (i in 1:length(grade_list)){
+  dma_se[i,"estimate"] <- sub_results[[i]]$theta[24] * (1-weight_df[i, "d_minor_mean"])
+  dma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[24] * abs(1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dma_se$estimate, sei = dma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.125(0.088)
+
+#d_minor ego x d_comp alter
+dme_dca <- data.frame(grade = grade_list,
+                      estimate = NA,
+                      ste = NA)
+for (i in 1:length(grade_list)){
+  dme_dca[i,"estimate"] <- sub_results[[i]]$theta[25] * (1-weight_df[i, "d_comp_mean"]) * (1-weight_df[i, "d_minor_mean"])
+  dme_dca[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[25] * abs(1-weight_df[i, "d_comp_mean"])* abs(1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dme_dca$estimate, sei = dme_dca$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.039(0.103)
+
+#d_minor ego x same ethnicity
+dme_se <- data.frame(grade = grade_list,
+                     estimate = NA,
+                     ste = NA)
+for (i in 1:length(grade_list)){
+  dme_se[i,"estimate"] <- sub_results[[i]]$theta[26] * (1-weight_df[i, "d_minor_mean"])
+  dme_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[26] * abs(1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dme_se$estimate, sei = dme_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.053(0.047)
+
+#d_comp alter x same ethnicity
+dca_se <- data.frame(grade = grade_list,
+                     estimate = NA,
+                     ste = NA)
+for (i in 1:length(grade_list)){
+  dca_se[i,"estimate"] <- sub_results[[i]]$theta[27] * (1-weight_df[i, "d_comp_mean"])
+  dca_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[27] * abs(1-weight_df[i, "d_comp_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dca_se$estimate, sei = dca_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.113(0.071)
+
+#d_minor ego x d_minor alter
+dme_dma <- data.frame(grade = grade_list,
+                      estimate = NA,
+                      ste = NA)
+for (i in 1:length(grade_list)){
+  dme_dma[i,"estimate"] <- sub_results[[i]]$theta[28] * (1-weight_df[i, "d_minor_mean"]) * (1-weight_df[i, "d_minor_mean"])
+  dme_dma[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[28] * abs(1-weight_df[i, "d_minor_mean"])* abs(1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dme_dma$estimate, sei = dme_dma$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.106(0.086)
+
+#d_minor ego x m_minor alter
+dme_mma <- data.frame(grade = grade_list,
+                      estimate = NA,
+                      ste = NA)
+for (i in 1:length(grade_list)){
+  dme_mma[i,"estimate"] <- sub_results[[i]]$theta[29] * (1-weight_df[i, "d_minor_mean"]) * (1-weight_df[i, "m_minor_mean"])
+  dme_mma[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[29] * abs(1-weight_df[i, "d_minor_mean"])* abs(1-weight_df[i, "m_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dme_mma$estimate, sei = dme_mma$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.088(0.128)
+
+#d_comp ego x d_comp alter
+dce_dca <- data.frame(grade = grade_list,
+                      estimate = NA,
+                      ste = NA)
+for (i in 1:length(grade_list)){
+  dce_dca[i,"estimate"] <- sub_results[[i]]$theta[30] * (1-weight_df[i, "d_comp_mean"]) * (1-weight_df[i, "d_comp_mean"])
+  dce_dca[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[30] * abs(1-weight_df[i, "d_comp_mean"])* abs(1-weight_df[i, "d_comp_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dce_dca$estimate, sei = dce_dca$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.093(0.083)
+
+#d_comp ego x same ethnicity
+dce_se <- data.frame(grade = grade_list,
+                     estimate = NA,
+                     ste = NA)
+for (i in 1:length(grade_list)){
+  dce_se[i,"estimate"] <- sub_results[[i]]$theta[31] * (1-weight_df[i, "d_comp_mean"])
+  dce_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[31] * abs(1-weight_df[i, "d_comp_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dce_se$estimate, sei = dce_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#-0.092(0.08)
+
+#d_comp ego x d_minor alter
+dce_dma <- data.frame(grade = grade_list,
+                      estimate = NA,
+                      ste = NA)
+for (i in 1:length(grade_list)){
+  dce_dma[i,"estimate"] <- sub_results[[i]]$theta[32] * (1-weight_df[i, "d_comp_mean"]) * (1-weight_df[i, "d_minor_mean"])
+  dce_dma[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[32] * abs(1-weight_df[i, "d_comp_mean"])* abs(1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dce_dma$estimate, sei = dce_dma$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.021(0.077)
+
+#d_comp ego x m_minor alter
+dce_mma <- data.frame(grade = grade_list,
+                      estimate = NA,
+                      ste = NA)
+for (i in 1:length(grade_list)){
+  dce_mma[i,"estimate"] <- sub_results[[i]]$theta[33] * (1-weight_df[i, "d_comp_mean"]) * (1-weight_df[i, "m_minor_mean"])
+  dce_mma[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[33] * abs(1-weight_df[i, "d_comp_mean"])* abs(1-weight_df[i, "m_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dce_mma$estimate, sei = dce_mma$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.028(0.121)
+
+#d_minor ego x d_comp alter x same ethnicity
+dme_dca_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  dme_dca_se[i,"estimate"] <- sub_results[[i]]$theta[34] * (1-weight_df[i, "d_minor_mean"]) * (1-weight_df[i, "d_comp_mean"])
+  dme_dca_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[34] * abs(1-weight_df[i, "d_minor_mean"])* abs(1-weight_df[i, "d_comp_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dme_dca_se$estimate, sei = dme_dca_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.377(0.121)**
+
+#d_minor ego x d_minor alter x same ethnicity
+dme_dma_se <- data.frame(grade = grade_list,
+                         estimate = NA,
+                         ste = NA)
+for (i in 1:length(grade_list)){
+  dme_dma_se[i,"estimate"] <- sub_results[[i]]$theta[35] * (1-weight_df[i, "d_minor_mean"]) * (1-weight_df[i, "d_minor_mean"])
+  dme_dma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[35] * abs(1-weight_df[i, "d_minor_mean"])* abs(1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dme_dma_se$estimate, sei = dme_dma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.099(0.169)
+
+#d_minor ego x m_minor alter x same ethnicity
+dme_mma_se <- data.frame(grade = grade_list,
+                         estimate = NA,
+                         ste = NA)
+for (i in 1:length(grade_list)){
+  dme_mma_se[i,"estimate"] <- sub_results[[i]]$theta[36] * (1-weight_df[i, "d_minor_mean"]) * (1-weight_df[i, "m_minor_mean"])
+  dme_mma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[36] * abs(1-weight_df[i, "d_minor_mean"])* abs(1-weight_df[i, "m_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dme_mma_se$estimate, sei = dme_mma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.152(0.173)
+
+#d_comp ego x d_comp alter x same ethnicity
+dce_dca_se <- data.frame(grade = grade_list,
+                         estimate = NA,
+                         ste = NA)
+for (i in 1:length(grade_list)){
+  dce_dca_se[i,"estimate"] <- sub_results[[i]]$theta[37] * (1-weight_df[i, "d_comp_mean"]) * (1-weight_df[i, "d_comp_mean"])
+  dce_dca_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[37] * abs(1-weight_df[i, "d_comp_mean"])* abs(1-weight_df[i, "d_comp_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dce_dca_se$estimate, sei = dce_dca_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.271(0.153)
+
+#d_comp ego x d_minor alter x same ethnicity
+dce_dma_se <- data.frame(grade = grade_list,
+                         estimate = NA,
+                         ste = NA)
+for (i in 1:length(grade_list)){
+  dce_dma_se[i,"estimate"] <- sub_results[[i]]$theta[38] * (1-weight_df[i, "d_comp_mean"]) * (1-weight_df[i, "d_minor_mean"])
+  dce_dma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[38] * abs(1-weight_df[i, "d_comp_mean"])* abs(1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dce_dma_se$estimate, sei = dce_dma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.062(0.12)
+
+#d_comp ego x m_minor alter x same ethnicity
+dce_mma_se <- data.frame(grade = grade_list,
+                         estimate = NA,
+                         ste = NA)
+for (i in 1:length(grade_list)){
+  dce_mma_se[i,"estimate"] <- sub_results[[i]]$theta[39] * (1-weight_df[i, "d_comp_mean"]) * (1-weight_df[i, "m_minor_mean"])
+  dce_mma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[39] * abs(1-weight_df[i, "d_comp_mean"])* abs(1-weight_df[i, "m_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dce_mma_se$estimate, sei = dce_mma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.259(0.261)
+
+#m_minor ego x m_minor alter x same ethnicity
+mme_mma_se <- data.frame(grade = grade_list,
+                         estimate = NA,
+                         ste = NA)
+for (i in 1:length(grade_list)){
+  mme_mma_se[i,"estimate"] <- sub_results[[i]]$theta[40] * (1-weight_df[i, "m_minor_mean"]) * (1-weight_df[i, "m_minor_mean"])
+  mme_mma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[40] * abs(1-weight_df[i, "m_minor_mean"])* abs(1-weight_df[i, "m_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mme_mma_se$estimate, sei = mme_mma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.354(0.323)
+
+#m_minor ego x d_minor alter x same ethnicity
+mme_dma_se <- data.frame(grade = grade_list,
+                         estimate = NA,
+                         ste = NA)
+for (i in 1:length(grade_list)){
+  mme_dma_se[i,"estimate"] <- sub_results[[i]]$theta[41] * (1-weight_df[i, "m_minor_mean"]) * (1-weight_df[i, "d_minor_mean"])
+  mme_dma_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[41] * abs(1-weight_df[i, "m_minor_mean"])* abs(1-weight_df[i, "d_minor_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mme_dma_se$estimate, sei = mme_dma_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.107(0.166)
+
+#m_minor ego x d_comp alter x same ethnicity
+mme_dca_se <- data.frame(grade = grade_list,
+                         estimate = NA,
+                         ste = NA)
+for (i in 1:length(grade_list)){
+  mme_dca_se[i,"estimate"] <- sub_results[[i]]$theta[42] * (1-weight_df[i, "m_minor_mean"]) * (1-weight_df[i, "d_comp_mean"])
+  mme_dca_se[i,"ste"] <- sqrt(diag(sub_results[[i]]$covtheta))[42] * abs(1-weight_df[i, "m_minor_mean"])* abs(1-weight_df[i, "d_comp_mean"])
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mme_dca_se$estimate, sei = mme_dca_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.688(0.241)**
+
+#now we have calculated all meta-analysis output
+
+#-----hypotheses 5 6 7 8 testing----------------------------
+#create a function to do it:
+linear_combination_siena <- function(sienaFit, names, weights) {
+  # Check inputs
+  if (length(names) != length(weights)) {
+    stop("The length of names and weights must match.")
+  }
+  
+  # Extract coefficients and standard errors from sienaFit object
+  effects_table <- data.frame(
+    name = sienaFit$effects$effectName,
+    coef = sienaFit$theta,
+    se = sienaFit$se
+  )
+  
+  # Filter for the specified coefficients
+  selected_effects <- effects_table[effects_table$name %in% names, ]
+  
+  if (nrow(selected_effects) != length(names)) {
+    stop("Some of the specified names are not found in the sienaFit object.")
+  }
+  
+  # Ensure the order of names matches the order in weights
+  selected_effects <- selected_effects[match(names, selected_effects$name), ]
+  
+  # Extract covariance matrix
+  cov_matrix <- sienaFit$covtheta
+  
+  # Create a weight vector
+  weight_vector <- rep(0, length(sienaFit$theta))
+  weight_vector[match(names, sienaFit$effects$effectName)] <- weights
+  
+  # Calculate the estimate
+  estimate <- sum(weight_vector * sienaFit$theta)
+  
+  # Calculate the standard error
+  var_combination <- t(weight_vector) %*% cov_matrix %*% weight_vector
+  std_error <- sqrt(as.numeric(var_combination))
+  
+  # Return the results
+  return(list(
+    estimate = estimate,
+    std_error = std_error
+  ))
+}
+
+#create a function to compare effect sizes
+compare_effects <- function(estimate1, se1, estimate2, se2) {
+  # Step 1: Calculate the difference of the estimates
+  difference <- estimate1 - estimate2
+  
+  # Step 2: Calculate the standard error of the difference
+  se_diff <- sqrt(se1^2 + se2^2)
+  
+  # Step 3: Calculate the z-value
+  z_value <- difference / se_diff
+  
+  # Step 4: Calculate the p-value for a two-tailed test
+  p_value <- 2 * (1 - pnorm(abs(z_value)))  # Two-tailed test
+  
+  # Return the results as a list
+  result <- list(
+    difference = difference,
+    se_diff = se_diff,
+    z_value = z_value,
+    p_value = p_value
+  )
+  
+  return(result)
+}
+#H5:d_minor
+#we need to calculate the group preference of 
+#5.1 d_minor -> d_minor of the same ethnicity
+#5.2 d_minor -> d_comp of the same ethnicity
+#5.3 d_minor -> m_minor of the same ethnicity
+#5.4 d_minor -> m_major
+
+
+#5.1 d_minor -> d_minor of the same ethnicity: 
+#Same(ethnicity) + D_minor (ego) + D_minor(alter) + D_minor (ego) * ethnicity + 
+#D_minor(alter)*ethnicity + D_minor (ego) * d_minor(alter) + D_minor (ego) * d_minor(alter) * ethnicity
+
+#according to what we need, create names and weights vector
+names_coef <- c("same ethnicity", "d_minor ego", "d_minor alter", "d_minor ego x same ethnicity",
+                "d_minor alter x same ethnicity", "d_minor ego x d_minor alter", "d_minor ego x d_minor alter x same ethnicity")
+
+dm_dm_se <- data.frame(grade = grade_list,
+                            estimate = NA,
+                            ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "d_minor_mean"], 1-weight_df[i, "d_minor_mean"], 1-weight_df[i, "d_minor_mean"],
+               1-weight_df[i, "d_minor_mean"], (1-weight_df[i, "d_minor_mean"])*(1-weight_df[i, "d_minor_mean"]),(1-weight_df[i, "d_minor_mean"])*(1-weight_df[i, "d_minor_mean"]))
+  
+  dm_dm_se[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dm_dm_se[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dm_dm_se$estimate, sei = dm_dm_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.586(0.152)***
+
+#5.2 d_minor -> d_comp of the same ethnicity
+#Same(ethnicity) + D_minor (ego) + D_comp(alter)+D_minor (ego) * ethnicity +D_comp(alter) * ethnicity 
+#D_minor (ego) * d_comp(alter) + D_minor (ego) * d_comp(alter) * ethnicity
+names_coef <- c("same ethnicity", "d_minor ego", "d_comp alter", "d_minor ego x same ethnicity",
+                "d_comp alter x same ethnicity", "d_minor ego x d_comp alter", "d_minor ego x d_comp alter x same ethnicity")
+
+dm_dc_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "d_minor_mean"], 1-weight_df[i, "d_comp_mean"], 1-weight_df[i, "d_minor_mean"],
+               1-weight_df[i, "d_comp_mean"], (1-weight_df[i, "d_minor_mean"])*(1-weight_df[i, "d_comp_mean"]),(1-weight_df[i, "d_minor_mean"])*(1-weight_df[i, "d_comp_mean"]))
+  
+  dm_dc_se[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dm_dc_se[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dm_dc_se$estimate, sei = dm_dc_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.576(0.12)***
+
+#5.3 d_minor -> m_minor of the same ethnicity
+#Same(ethnicity) + D_minor (ego) + m_minor(alter) + D_minor (ego) * ethnicity + 
+#m_minor(alter)*ethnicity + D_minor (ego) * m_minor(alter) + D_minor (ego) * m_minor(alter) * ethnicity
+
+#according to what we need, create names and weights vector
+names_coef <- c("same ethnicity", "d_minor ego", "m_minor alter", "d_minor ego x same ethnicity",
+                "m_minor alter x same ethnicity", "d_minor ego x m_minor alter", "d_minor ego x m_minor alter x same ethnicity")
+
+dm_mm_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "d_minor_mean"], 1-weight_df[i, "m_minor_mean"], 1-weight_df[i, "d_minor_mean"],
+               1-weight_df[i, "m_minor_mean"], (1-weight_df[i, "d_minor_mean"])*(1-weight_df[i, "m_minor_mean"]),(1-weight_df[i, "d_minor_mean"])*(1-weight_df[i, "m_minor_mean"]))
+  
+  dm_mm_se[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dm_mm_se[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dm_mm_se$estimate, sei = dm_mm_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.485(0.126)***
+
+#5.4 d_minor -> m_major
+#d_minor(ego):0.06(0.053)
+
+#h5 testing
+h5_1 <- compare_effects(0.586, 0.152, 0.06, 0.053) #
+#conclusion: 0.526(0.161)**
+h5_2 <- compare_effects(0.576, 0.12, 0.06, 0.053)
+#conclusion: 0.516(0.131)***
+h5_3 <- compare_effects(0.485, 0.126, 0.06, 0.053)
+#conclusion: 0.425(0.137)**
+#H5 could be fully accepted!
+
+#H6: d_comp
+#we need to calculate the group preference of 
+#6.1 d_comp -> d_minor of the same ethnicity
+#6.2 d_comp -> d_comp of the same ethnicity
+#6.3 d_comp -> m_minor of the same ethnicity
+#6.4 d_comp -> m_major
+#6.5 d_comp -> d_minor of other ethnicities #6.5 6.6 6.7 are not necessary, but we just calculated them
+#6.6 d_comp -> d_comp of other ethnicities
+#6.7 d_comp -> m_minor of other ethnicities
+
+#6.1 d_comp -> d_minor of the same ethnicity
+names_coef <- c("same ethnicity", "d_comp ego", "d_minor alter", "d_comp ego x same ethnicity",
+                "d_minor alter x same ethnicity", "d_comp ego x d_minor alter", "d_comp ego x d_minor alter x same ethnicity")
+
+dc_dm_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "d_comp_mean"], 1-weight_df[i, "d_minor_mean"], 1-weight_df[i, "d_comp_mean"],
+               1-weight_df[i, "d_minor_mean"], (1-weight_df[i, "d_comp_mean"])*(1-weight_df[i, "d_minor_mean"]),(1-weight_df[i, "d_comp_mean"])*(1-weight_df[i, "d_minor_mean"]))
+  
+  dc_dm_se[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dc_dm_se[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dc_dm_se$estimate, sei = dc_dm_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.422(0.131)**
+
+#6.2 d_comp -> d_comp of the same ethnicity
+names_coef <- c("same ethnicity", "d_comp ego", "d_comp alter", "d_comp ego x same ethnicity",
+                "d_comp alter x same ethnicity", "d_comp ego x d_comp alter", "d_comp ego x d_comp alter x same ethnicity")
+
+dc_dc_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "d_comp_mean"], 1-weight_df[i, "d_comp_mean"], 1-weight_df[i, "d_comp_mean"],
+               1-weight_df[i, "d_comp_mean"], (1-weight_df[i, "d_comp_mean"])*(1-weight_df[i, "d_comp_mean"]),(1-weight_df[i, "d_comp_mean"])*(1-weight_df[i, "d_comp_mean"]))
+  
+  dc_dc_se[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dc_dc_se[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dc_dc_se$estimate, sei = dc_dc_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.442(0.113)***
+
+#6.3 d_comp -> m_minor of the same ethnicity
+names_coef <- c("same ethnicity", "d_comp ego", "m_minor alter", "d_comp ego x same ethnicity",
+                "m_minor alter x same ethnicity", "d_comp ego x m_minor alter", "d_comp ego x m_minor alter x same ethnicity")
+
+dc_mm_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "d_comp_mean"], 1-weight_df[i, "m_minor_mean"], 1-weight_df[i, "d_comp_mean"],
+               1-weight_df[i, "m_minor_mean"], (1-weight_df[i, "d_comp_mean"])*(1-weight_df[i, "m_minor_mean"]),(1-weight_df[i, "d_comp_mean"])*(1-weight_df[i, "m_minor_mean"]))
+  
+  dc_mm_se[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dc_mm_se[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dc_mm_se$estimate, sei = dc_mm_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.447(0.181)*
+
+#6.4 d_comp -> m_major
+#d_comp(ego) : 0.1(0.069)
+
+#6.5 d_comp -> d_minor of other ethnicities
+names_coef <- c("d_comp ego", "d_minor alter", "d_comp ego x d_minor alter")
+
+dc_dm_oe <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1-weight_df[i, "d_comp_mean"], 1-weight_df[i, "d_minor_mean"],(1-weight_df[i, "d_comp_mean"])*(1-weight_df[i, "d_minor_mean"]))
+  
+  dc_dm_oe[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dc_dm_oe[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dc_dm_oe$estimate, sei = dc_dm_oe$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.157(0.094) p=0.095
+
+#6.6 d_comp -> d_comp of other ethnicities
+names_coef <- c("d_comp ego", "d_comp alter", "d_comp ego x d_comp alter")
+
+dc_dc_oe <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1-weight_df[i, "d_comp_mean"], 1-weight_df[i, "d_comp_mean"],(1-weight_df[i, "d_comp_mean"])*(1-weight_df[i, "d_comp_mean"]))
+  
+  dc_dc_oe[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dc_dc_oe[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dc_dc_oe$estimate, sei = dc_dc_oe$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.073(0.086)
+
+#6.7 d_comp -> m_minor of other ethnicities
+names_coef <- c("d_comp ego", "m_minor alter", "d_comp ego x m_minor alter")
+
+dc_mm_oe <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1-weight_df[i, "d_comp_mean"], 1-weight_df[i, "m_minor_mean"],(1-weight_df[i, "d_comp_mean"])*(1-weight_df[i, "m_minor_mean"]))
+  
+  dc_mm_oe[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  dc_mm_oe[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = dc_mm_oe$estimate, sei = dc_mm_oe$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.14(0.155)
+
+
+#H7: m_major
+#7.1 m_major -> m_major (0,0) #baseline, no need to calculate
+#7.2 m_major -> d_comp
+#7.3 m_major -> d_minor
+#7.4 m_major -> m_minor
+
+#7.2 d_comp(alter) : 0.064(0.037)
+#7.3 d_minor(alter) : 0.023(0.035)
+#7.4 m_minor(alter) : -0.004(0.052)
+
+
+
+#H7 is rejected
+
+#H8: m_minor
+#8.1 m_minor -> m_minor of the same ethnicity
+#8.2 m_minor -> d_minor of the same ethnicity
+#8.3 m_minor -> d_comp of the same ethnicity
+#8.4 m_minor -> m_major
+
+#8.1 m_minor -> m_minor of the same ethnicity
+names_coef <- c("same ethnicity", "m_minor ego", "m_minor alter", "m_minor ego x same ethnicity",
+                "m_minor alter x same ethnicity", "m_minor ego x m_minor alter", "m_minor ego x m_minor alter x same ethnicity")
+
+mm_mm_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "m_minor_mean"], 1-weight_df[i, "m_minor_mean"], 1-weight_df[i, "m_minor_mean"],
+               1-weight_df[i, "m_minor_mean"], (1-weight_df[i, "m_minor_mean"])*(1-weight_df[i, "m_minor_mean"]),(1-weight_df[i, "m_minor_mean"])*(1-weight_df[i, "m_minor_mean"]))
+  
+  mm_mm_se[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  mm_mm_se[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mm_mm_se$estimate, sei = mm_mm_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.905(0.233)***
+
+#8.2 m_minor -> d_minor of the same ethnicity
+names_coef <- c("same ethnicity", "m_minor ego", "d_minor alter", "m_minor ego x same ethnicity",
+                "d_minor alter x same ethnicity", "m_minor ego x d_minor alter", "m_minor ego x d_minor alter x same ethnicity")
+
+mm_dm_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "m_minor_mean"], 1-weight_df[i, "d_minor_mean"], 1-weight_df[i, "m_minor_mean"],
+               1-weight_df[i, "d_minor_mean"], (1-weight_df[i, "m_minor_mean"])*(1-weight_df[i, "d_minor_mean"]),(1-weight_df[i, "m_minor_mean"])*(1-weight_df[i, "d_minor_mean"]))
+  
+  mm_dm_se[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  mm_dm_se[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mm_dm_se$estimate, sei = mm_dm_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.535(0.123)***
+
+#8.3 m_minor -> d_comp of the same ethnicity
+names_coef <- c("same ethnicity", "m_minor ego", "d_comp alter", "m_minor ego x same ethnicity",
+                "d_comp alter x same ethnicity", "m_minor ego x d_comp alter", "m_minor ego x d_comp alter x same ethnicity")
+
+mm_dc_se <- data.frame(grade = grade_list,
+                       estimate = NA,
+                       ste = NA)
+for (i in 1:length(grade_list)){
+  weights <- c(1, 1-weight_df[i, "m_minor_mean"], 1-weight_df[i, "d_comp_mean"], 1-weight_df[i, "m_minor_mean"],
+               1-weight_df[i, "d_comp_mean"], (1-weight_df[i, "m_minor_mean"])*(1-weight_df[i, "d_comp_mean"]),(1-weight_df[i, "m_minor_mean"])*(1-weight_df[i, "d_comp_mean"]))
+  
+  mm_dc_se[i,"estimate"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$estimate
+  mm_dc_se[i,"ste"] <- linear_combination_siena(sub_results[[i]],names_coef,weights)$std_error
+}
+
+# Perform univariate meta-analysis using REML
+meta_analysis_result <- rma(yi = mm_dc_se$estimate, sei = mm_dc_se$ste, method = "REML")
+
+# View the summary of the results
+summary(meta_analysis_result)
+#0.704(0.173)***
+
+#8.4 m_minor -> m_major: m_minor(ego) 0.053(0.077)
+
+h8_1 <- compare_effects(0.905, 0.233, 0.053, 0.077)
+#0.852(0.245)***
+h8_2 <- compare_effects(0.535, 0.123, 0.053, 0.077)
+#0.482(0.145)***
+h8_3 <- compare_effects(0.704, 0.173, 0.053, 0.077)
+#0.651(0.189)***
+
+#H8 can be fully accepted!
+
+##visualizations
+#
+##generate friendship preference plot by group
+# Load required library
+
+library(ggplot2)
+
+#par(mfrow = c(2, 2))
+#m_major
+data <- data.frame(
+  group = c("m_major->m_major", "m_major->d_comp", "m_major->d_minor", "m_major->m_minor"),
+  Estimate = c(0, 0.064, 0.023, -0.004),
+  SE = c(0, 0.037, 0.035, 0.052)
+)
+
+# Set the group as a factor with the desired order
+data$group <- factor(data$group, levels = c("m_major->m_major", "m_major->d_comp", "m_major->d_minor", "m_major->m_minor"))
+
+# Calculate confidence intervals
+data$Lower_CI <- data$Estimate - 1.96 * data$SE
+data$Upper_CI <- data$Estimate + 1.96 * data$SE
+
+par(family = "serif") #font change as Times New Roman
+# Create the plot
+
+# Create the plot
+library(ggplot2)
+
+ggplot(data, aes(x = group, y = Estimate)) +
+  geom_pointrange(aes(ymin = Lower_CI, ymax = Upper_CI), 
+                  position = position_dodge(width = 0.3), 
+                  size = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  theme_minimal() +
+  labs(
+    title = "Mono-Majority Friendship Preferences",
+    x = NULL,
+    y = "Estimate"
+  ) +
+  theme(
+    text = element_text(family = "serif", size = 12),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12, angle = 45, hjust = 1), # Rotate x-axis labels for readability
+    plot.title = element_text(hjust = 0.5, size = 16) # Centers title and adjusts font size
+  )
+
+#d_comp
+data <- data.frame(
+  group = c("d_comp->m_major", "d_comp->d_comp se.", "d_comp->d_minor se.", "d_comp->m_minor se."),
+  Estimate = c(0.1, 0.442, 0.422, 0.447),
+  SE = c(0.069, 0.113, 0.131, 0.181)
+)
+
+# Set the group as a factor with the desired order
+data$group <- factor(data$group, levels = c("d_comp->m_major", "d_comp->d_comp se.", "d_comp->d_minor se.", "d_comp->m_minor se."))
+
+# Calculate confidence intervals
+data$Lower_CI <- data$Estimate - 1.96 * data$SE
+data$Upper_CI <- data$Estimate + 1.96 * data$SE
+
+par(family = "serif") #font change as Times New Roman
+# Create the plot
+
+# Create the plot
+library(ggplot2)
+
+ggplot(data, aes(x = group, y = Estimate)) +
+  geom_pointrange(aes(ymin = Lower_CI, ymax = Upper_CI), 
+                  position = position_dodge(width = 0.3), 
+                  size = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  theme_minimal() +
+  labs(
+    title = "Compartmentalization dual identifiers' Friendship Preferences",
+    x = NULL,
+    y = "Estimate"
+  ) +
+  theme(
+    text = element_text(family = "serif", size = 12),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12, angle = 45, hjust = 1), # Rotate x-axis labels for readability
+    plot.title = element_text(hjust = 0.5, size = 16) # Centers title and adjusts font size
+  )
+
+#d_minor
+data <- data.frame(
+  group = c("d_minor->m_major", "d_minor->d_comp se.", "d_minor->d_minor se.", "d_minor->m_minor se."),
+  Estimate = c(0.06, 0.576, 0.586, 0.485),
+  SE = c(0.053, 0.12, 0.152, 0.126)
+)
+
+# Set the group as a factor with the desired order
+data$group <- factor(data$group, levels = c("d_minor->m_major", "d_minor->d_comp se.", "d_minor->d_minor se.", "d_minor->m_minor se."))
+
+# Calculate confidence intervals
+data$Lower_CI <- data$Estimate - 1.96 * data$SE
+data$Upper_CI <- data$Estimate + 1.96 * data$SE
+
+par(family = "serif") #font change as Times New Roman
+# Create the plot
+
+# Create the plot
+library(ggplot2)
+
+ggplot(data, aes(x = group, y = Estimate)) +
+  geom_pointrange(aes(ymin = Lower_CI, ymax = Upper_CI), 
+                  position = position_dodge(width = 0.3), 
+                  size = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  theme_minimal() +
+  labs(
+    title = "Dominance-minority dual identifiers' Friendship Preferences",
+    x = NULL,
+    y = "Estimate"
+  ) +
+  theme(
+    text = element_text(family = "serif", size = 12),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12, angle = 45, hjust = 1), # Rotate x-axis labels for readability
+    plot.title = element_text(hjust = 0.5, size = 16) # Centers title and adjusts font size
+  )
+
+#m_minor
+data <- data.frame(
+  group = c("m_minor->m_major", "m_minor->d_comp se.", "m_minor->d_minor se.", "m_minor->m_minor se."),
+  Estimate = c(0.053, 0.704, 0.535, 0.905),
+  SE = c(0.077, 0.173, 0.123, 0.233)
+)
+
+# Set the group as a factor with the desired order
+data$group <- factor(data$group, levels = c("m_minor->m_major", "m_minor->d_comp se.", "m_minor->d_minor se.", "m_minor->m_minor se."))
+
+# Calculate confidence intervals
+data$Lower_CI <- data$Estimate - 1.96 * data$SE
+data$Upper_CI <- data$Estimate + 1.96 * data$SE
+
+par(family = "serif") #font change as Times New Roman
+# Create the plot
+
+# Create the plot
+library(ggplot2)
+
+ggplot(data, aes(x = group, y = Estimate)) +
+  geom_pointrange(aes(ymin = Lower_CI, ymax = Upper_CI), 
+                  position = position_dodge(width = 0.3), 
+                  size = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  theme_minimal() +
+  labs(
+    title = "Mono-minority Friendship Preferences",
+    x = NULL,
+    y = "Estimate"
+  ) +
+  theme(
+    text = element_text(family = "serif", size = 12),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12, angle = 45, hjust = 1), # Rotate x-axis labels for readability
+    plot.title = element_text(hjust = 0.5, size = 16) # Centers title and adjusts font size
+  )
+
+##generate hypotheses testing plots
+
+#H5:
+
+data <- data.frame(
+  group = c("d_comp vs. m_major**","d_minor vs. m_major***", "m_minor vs. m_major**"),
+  Estimate = c(0.516, 0.526, 0.425),
+  SE = c(0.131, 0.101, 0.137)
+)
+
+# Set the group as a factor with the desired order
+data$group <- factor(data$group, levels = c("d_comp vs. m_major**","d_minor vs. m_major***", "m_minor vs. m_major**"))
+
+# Calculate confidence intervals
+data$Lower_CI <- data$Estimate - 1.96 * data$SE
+data$Upper_CI <- data$Estimate + 1.96 * data$SE
+
+par(family = "serif") #font change as Times New Roman
+# Create the plot
+
+# Create the plot
+library(ggplot2)
+
+ggplot(data, aes(x = group, y = Estimate)) +
+  geom_pointrange(aes(ymin = Lower_CI, ymax = Upper_CI), 
+                  position = position_dodge(width = 0.3), 
+                  size = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  theme_minimal() +
+  labs(
+    title = "H5: Comparing Dominance-minority dual identifiers' preferences",
+    x = NULL,
+    y = "Estimate"
+  ) +
+  theme(
+    text = element_text(family = "serif", size = 12),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12, angle = 45, hjust = 1), # Rotate x-axis labels for readability
+    plot.title = element_text(hjust = 0.5, size = 16) # Centers title and adjusts font size
+)
+
+
+
+
