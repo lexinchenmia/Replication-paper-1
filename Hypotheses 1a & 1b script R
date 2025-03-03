@@ -1,0 +1,1194 @@
+#h1a & h1b 3.0
+#Lexin Chen
+#Utrecht University
+
+#the data can be accessed through online application
+#link: https://datasearch.fdz.dezim-institut.de/item/de.dezim/5bb95fb7-9483-4390-9594-59563a43eac8
+#for any question about data, contact (https://larsleszczensky.wordpress.com/)
+
+#I would like to mention that not all codes are useful because we conducted some additional analyses not shown in the paper.
+#here h1 means h1a, h1a means h1b, because we changed how we label hypotheses at the very end phase of writing this paper, but we don't want to change everything in the codes.
+
+
+#set working directory
+setwd() #for replication, set your own working directory
+
+library(tidyverse)
+library(haven)
+library(dplyr)
+library(psych)
+library(epiDisplay)
+library(foreign)
+library(igraph)
+library(snahelper)
+library(ggplot2)
+library(ggraph)
+library(RSiena)
+library(network)
+
+#first create two functions for later use
+
+#this function is designed to count the number of different types of inter-ethnic bridges
+bridge_count <- function(dataframe){ ##for both mono-ego and dual-ego networks
+  dataframe <- unique(dataframe)
+  if (nrow(dataframe) < 3 | dataframe[1,2]=="9999"){ #if the degree < 3 or the ego itself is a missing value
+    bridge_sum <- c(9999, 9999, 9999, 9999, 9999)
+    return(bridge_sum)
+  } else{
+    pairs <- combn(dataframe$ego[-1], 2)
+    pairs <- t(pairs)
+    pair_length <-dim(pairs)[1]
+    # Create a data frame with the pairs
+    temp_df <- data.frame(ego = rep(dataframe[1,1],pair_length), alt1 = pairs[, 1], alt2 = pairs[, 2])
+    
+    temp_df$e11 <- rep(dataframe[1,2],pair_length)
+    temp_df$e12 <- rep(dataframe[1,3],pair_length)
+    temp_df$e21 <- NA
+    temp_df$e22 <- NA
+    temp_df$e31 <- NA
+    temp_df$e32 <- NA
+    
+    for (i in 1:pair_length){
+      temp_df[i,"e21"] <- dataframe[which(dataframe$ego==temp_df[i,"alt1"]),"e1"]
+      temp_df[i,"e22"] <- dataframe[which(dataframe$ego==temp_df[i,"alt1"]),"e2"]
+      temp_df[i,"e31"] <- dataframe[which(dataframe$ego==temp_df[i,"alt2"]),"e1"]
+      temp_df[i,"e32"] <- dataframe[which(dataframe$ego==temp_df[i,"alt2"]),"e2"]
+    }
+    
+    
+    #counting bridges first
+    temp_df[is.na(temp_df)] <- "9999"
+    temp_df$iet <- NA
+    for (i in 1:nrow(temp_df)){
+      if ((temp_df[i,"e21"]==temp_df[i,"e31"]) & (temp_df[i,"e22"]==temp_df[i,"e32"])){
+        temp_df[i,"iet"] <- 0
+      }else if (temp_df[i,"e21"]=="9999" | temp_df[i,"e31"]=="9999") {
+        temp_df[i,"iet"] <- 9999
+      }else {
+        temp_df[i,"iet"] <- 1
+      }
+    }
+    all_bridges <- sum(temp_df$iet==1, na.rm=T) #iet means inter-ethnic triads
+    
+    if (is.na(dataframe[1,3]) | dataframe[1,3] == "9999"){
+      bridge_sum <- c(all_bridges, 9999, 9999, 9999, 9999)
+      return(bridge_sum) #mono-ego network can't count strict bridges
+    } else {
+      temp_df$strict <- NA
+      temp_df$g_major <- NA
+      temp_df$g_minor <- NA
+      
+      for (i in 1:nrow(temp_df)){
+        if (temp_df[i,"iet"]==1){
+          temp <- temp_df[i,6:9]
+          temp_elements <- temp[temp != "9999"]
+          ego_elements <- temp_df[i,4:5]
+          if (any(!temp_elements %in% ego_elements)){
+            temp_df[i,"strict"] <- 0
+            if ((temp_df[i,"e21"]==1 & temp_df[i, "e22"]=="9999")|(temp_df[i,"e31"]==1 & temp_df[i, "e32"]=="9999")){
+              temp_df[i, "g_major"] <- 1
+            }
+            if ((temp_df[i,"e21"]==temp_df[i,"e12"] & temp_df[i, "e22"]=="9999")|(temp_df[i,"e31"]==temp_df[i,"e12"] & temp_df[i, "e32"]=="9999")){
+              temp_df[i, "g_minor"] <- 1
+            }
+          }else{
+            temp_df[i,"strict"] <- 1
+          }
+        }
+      }
+      
+      strict_bridges <- sum(temp_df$strict == 1, na.rm=T)
+      generalized_bridges <- sum(temp_df$strict == 0, na.rm=T)
+      generalized_majority_bridges <- sum(temp_df$g_major == 1, na.rm=T)
+      generalized_minority_bridges <- sum(temp_df$g_minor == 1, na.rm=T)
+      
+      bridge_sum <- c(all_bridges, strict_bridges, generalized_bridges, generalized_majority_bridges, generalized_minority_bridges)
+      return(bridge_sum)
+    }
+  }
+}
+
+#this function is designed to calculate the maximum possible number of  strict/generalized bridges. Please read my paper to see why we do this.
+max_diverse_distribution <- function(counts, types, m){
+  # Sort counts and types in descending order based on counts
+  sorted_indices <- order(counts, decreasing = TRUE)
+  counts <- counts[sorted_indices]
+  types <- types[sorted_indices]
+  # Initialize a vector to store the numbers picked for each type
+  picked_counts <- numeric(length(counts))
+  
+  while (m > 0){
+    if (m <= length(counts[counts>0])){
+      picked_counts[1:m]<-picked_counts[1:m] + 1
+      break
+    } else {
+      picked_counts[1:length(counts[counts>0])] <- picked_counts[1:length(counts[counts>0])] + 1
+      m <- m - length(counts[counts>0])
+      counts <- counts - 1
+      if (all(counts <= 0)){
+        break
+      }
+    }
+  }
+  
+  # Initialize the total non-same pairs count
+  total_pairs <- 0
+  # Calculate the actual number of non-same pairs based on the distribution
+  for (i in 1:(length(picked_counts) - 1)) {
+    total_pairs <- total_pairs + picked_counts[i] * sum(picked_counts[(i + 1):length(counts)])
+  }
+  
+  picked_table <- data.frame(types = types,
+                             picked = picked_counts)
+  
+  return(list(picked_table = picked_table, bridge = total_pairs))
+}
+
+##load the original dataset
+
+fis_orig <- read_dta("dezim_fis_long_c_110.dta")
+
+##
+fis_sub <- fis_orig[which(fis_orig$wave %in% c(1,2,3)),]
+
+
+fis_sub <- fis_sub[,c("id_g","id_p","id_c","wave","c1_coded_group","b4_coded_group","b1_2","b1_3","b2_1","b2_2","b2_3","b2_4",
+                      "c2_2","c2_3","c3_1","c3_2","c3_3","c3_4","c4","c7","c8_1","ed_a6","a7_3_group","a1_0101",
+                      "a1_0102","a1_0103","a1_0104","a1_0105","a1_0106","a1_0107","a1_0108","a1_0109","a1_0110")]
+##b4_coded_group transformed to b4
+fis_sub$b4 <- as.numeric(fis_sub$b4_coded_group)
+fis_sub$c1 <- as.numeric(fis_sub$c1_coded_group)
+
+fis_sub$b1_2 <- ifelse(is.na(fis_sub$b1_2), NA, 6 - fis_sub$b1_2)
+fis_sub$b1_3 <- ifelse(is.na(fis_sub$b1_3), NA, 6 - fis_sub$b1_3)
+fis_sub$b2_1 <- ifelse(is.na(fis_sub$b2_1), NA, 6 - fis_sub$b2_1)
+fis_sub$b2_2 <- ifelse(is.na(fis_sub$b2_2), NA, 6 - fis_sub$b2_2)
+fis_sub$b2_3 <- ifelse(is.na(fis_sub$b2_3), NA, 6 - fis_sub$b2_3)
+fis_sub$b2_4 <- ifelse(is.na(fis_sub$b2_4), NA, 6 - fis_sub$b2_4)
+fis_sub$c2_2 <- ifelse(is.na(fis_sub$c2_2), NA, 6 - fis_sub$c2_2)
+fis_sub$c2_3 <- ifelse(is.na(fis_sub$c2_3), NA, 6 - fis_sub$c2_3)
+fis_sub$c3_1 <- ifelse(is.na(fis_sub$c3_1), NA, 6 - fis_sub$c3_1)
+fis_sub$c3_2 <- ifelse(is.na(fis_sub$c3_2), NA, 6 - fis_sub$c3_2)
+fis_sub$c3_3 <- ifelse(is.na(fis_sub$c3_3), NA, 6 - fis_sub$c3_3)
+fis_sub$c3_4 <- ifelse(is.na(fis_sub$c3_4), NA, 6 - fis_sub$c3_4)
+
+#national identity
+fis_sub$ni <- rowMeans(fis_sub[, c("b1_2", "b1_3", "b2_1", "b2_2", "b2_3", "b2_4")], na.rm = TRUE)
+
+#ethnic identity
+fis_sub$ei <- rowMeans(fis_sub[, c("c2_2", "c2_3", "c3_1", "c3_2", "c3_3", "c3_4")], na.rm = TRUE)
+
+##ethnicity(only minority background)
+fis_sub$ethnicity <- ifelse(is.na(fis_sub$c1)==F,fis_sub$c1,
+                            ifelse(is.na(fis_sub$c1)==T & fis_sub$b4==1,1,NA))
+
+table(fis_sub$ethnicity)
+
+#self-identification
+
+# Assuming your data is in a data frame called fis_sub
+fis_sub$si_g <- ifelse(is.na(fis_sub$ni) | is.na(fis_sub$ei), NA,
+                       ifelse(fis_sub$ni < 2 & fis_sub$ei < 2, "n_i",
+                              ifelse(fis_sub$ni >= 2 & fis_sub$ni <= 3 & fis_sub$ei < 2, "n_i",
+                                     ifelse(fis_sub$ei >= 2 & fis_sub$ei <= 3 & fis_sub$ni < 2, "n_i",
+                                            ifelse(fis_sub$ni >= 2 & fis_sub$ni <= 3 & fis_sub$ei >= 2 & fis_sub$ei <= 3 & fis_sub$c7 %in% c(3,5,7,9), "d_inter",
+                                                   ifelse(fis_sub$ei < 2 & fis_sub$ni > 3, "m_major",
+                                                          ifelse(fis_sub$ni < 2 & fis_sub$ei > 3, "m_minor",
+                                                                 ifelse(fis_sub$ni > 3 & fis_sub$ei > 3 & abs(fis_sub$ni - fis_sub$ei) < 1, "d_comp",
+                                                                        ifelse(fis_sub$ni > fis_sub$ei & abs(fis_sub$ni - fis_sub$ei) >= 1, "d_major",
+                                                                               ifelse(fis_sub$ni < fis_sub$ei & abs(fis_sub$ni - fis_sub$ei) >= 1, "d_minor", NA))))))))))
+
+
+fis_sub$si_g <- ifelse(is.na(fis_sub$si_g)==T & fis_sub$b4==1,"m_major",fis_sub$si_g)
+fis_sub$si_g <- ifelse(fis_sub$ethnicity=="1","m_major",fis_sub$si_g)
+table(fis_sub$si_g, fis_sub$wave)##seems a good quality
+
+table(fis_sub$si_g)
+
+
+
+
+#####create dummy variables for siena
+##m_major
+fis_sub$m_major <- ifelse(fis_sub$si_g=="m_major",1,0)
+##m_minor
+fis_sub$m_minor <- ifelse(fis_sub$si_g=="m_minor",1,0)
+##d_major
+fis_sub$d_major <- ifelse(fis_sub$si_g=="d_major",1,0)
+##d_minor
+fis_sub$d_minor <- ifelse(fis_sub$si_g=="d_minor",1,0)
+##d_comp
+fis_sub$d_comp <- ifelse(fis_sub$si_g=="d_comp",1,0)
+##d_inter
+fis_sub$d_inter <- ifelse(fis_sub$si_g=="d_inter",1,0)
+##dual
+fis_sub$dual <- ifelse(fis_sub$si_g %in% c("d_major","d_minor","d_comp","d_inter"),1,0)
+
+
+###
+cols.num <- c("id_p","id_c","wave","ethnicity","ed_a6","a1_0101",
+              "a1_0102","a1_0103","a1_0104","a1_0105","a1_0106","a1_0107",
+              "a1_0108","a1_0109","a1_0110")
+fis_sub[cols.num] <- sapply(fis_sub[cols.num],as.character)
+sapply(fis_sub, class)
+#seperate ethnicity into e1 and e2
+fis_sub$e1 <- ifelse(fis_sub$si_g=="m_major","1",
+                     ifelse(fis_sub$si_g %in% c("d_major","d_minor","d_comp","d_inter"),"1",
+                            ifelse(fis_sub$si_g == "m_minor",fis_sub$ethnicity,"9999")))
+fis_sub$e2 <- ifelse(fis_sub$si_g == "m_major","9999",
+                     ifelse(fis_sub$si_g == "m_minor","9999",
+                            ifelse(fis_sub$si_g %in% c("d_major","d_minor","d_comp","d_inter"),fis_sub$ethnicity,9999)))
+fis_sub$e2 <- ifelse(fis_sub$e1=="1" & fis_sub$e2=="1","9999",fis_sub$e2)
+fis_sub$e1[is.na(fis_sub$e1)]<-"9999"
+fis_sub$e2[is.na(fis_sub$e2)]<-"9999"
+table(fis_sub$e1, fis_sub$e2, useNA="ifany")
+
+
+#seperate data into respective waves
+
+fis_sub_1 <- fis_sub[which(fis_sub$wave==1),]
+fis_sub_2 <- fis_sub[which(fis_sub$wave==2),]
+fis_sub_3 <- fis_sub[which(fis_sub$wave==3),]
+
+
+#then we make the egde list of friendship networks
+#####
+el_1 <- list()
+for (k in 1:29){
+  fis_temp <- fis_sub_1[which(fis_sub_1$id_g==k),]
+  
+  eg_1 <- data.frame("from" = NA, "to" = NA)
+  for (i in 1:nrow(fis_temp)){
+    temp<-fis_temp[i,c("id_p","a1_0101", "a1_0102","a1_0103","a1_0104","a1_0105","a1_0106","a1_0107",
+                       "a1_0108","a1_0109","a1_0110")]
+    for (j in 2:11){
+      if (is.na(temp[1,j])==FALSE){
+        temp2 <- data.frame("from" = temp[[1,1]], "to" = temp[[1,j]])
+        eg_1 <- rbind(eg_1, temp2)
+      }
+    }
+  }
+  eg_1 <- eg_1[-1,]
+  
+  el_1 <- c(el_1, list(eg_1))
+}
+
+
+
+#####
+el_2 <- list()
+for (k in 1:29){
+  fis_temp <- fis_sub_2[which(fis_sub_2$id_g==k),]
+  
+  eg_1 <- data.frame("from" = NA, "to" = NA)
+  for (i in 1:nrow(fis_temp)){
+    temp<-fis_temp[i,c("id_p","a1_0101", "a1_0102","a1_0103","a1_0104","a1_0105","a1_0106","a1_0107",
+                       "a1_0108","a1_0109","a1_0110")]
+    for (j in 2:11){
+      if (is.na(temp[1,j])==FALSE){
+        temp2 <- data.frame("from" = temp[[1,1]], "to" = temp[[1,j]])
+        eg_1 <- rbind(eg_1, temp2)
+      }
+    }
+  }
+  eg_1 <- eg_1[-1,]
+  
+  el_2 <- c(el_2, list(eg_1))
+}
+
+
+
+#####
+el_3 <- list()
+for (k in 1:29){
+  fis_temp <- fis_sub_3[which(fis_sub_3$id_g==k),]
+  
+  eg_1 <- data.frame("from" = NA, "to" = NA)
+  for (i in 1:nrow(fis_temp)){
+    temp<-fis_temp[i,c("id_p","a1_0101", "a1_0102","a1_0103","a1_0104","a1_0105","a1_0106","a1_0107",
+                       "a1_0108","a1_0109","a1_0110")]
+    for (j in 2:11){
+      if (is.na(temp[1,j])==FALSE){
+        temp2 <- data.frame("from" = temp[[1,1]], "to" = temp[[1,j]])
+        eg_1 <- rbind(eg_1, temp2)
+      }
+    }
+  }
+  eg_1 <- eg_1[-1,]
+  
+  el_3 <- c(el_3, list(eg_1))
+}
+
+
+
+
+#then we make three network objects
+##the first wave
+graph_1 <- list()
+for (i in 1:29){
+  g_1 <- graph(t(el_1[[i]]),directed=T)
+  g_1<-simplify(g_1)
+  
+  graph_1 <- c(graph_1, list(g_1))
+}
+
+#vcount(g_1)
+#needs to be personal id
+#L <- layout.fruchterman.reingold(g_1) # nice for large graphs
+#L <- layout.kamada.kawai(g) # for not too large graphs
+#plot(g_1, layout=L)
+#E(g_1)$color <- "black" # default color
+#plot(g_1, layout=L, edge.arrow.size=.2, edge.color=E(g_1)$color)
+
+#V(g_1)
+
+##the second wave
+graph_2 <- list()
+for (i in 1:29){
+  g_1 <- graph(t(el_2[[i]]),directed=T)
+  g_1<-simplify(g_1)
+  
+  graph_2 <- c(graph_2, list(g_1))
+}
+#V(g_2)$name is the id_p
+
+##the third wave
+graph_3 <- list()
+for (i in 1:29){
+  g_1 <- graph(t(el_3[[i]]),directed=T)
+  g_1<-simplify(g_1)
+  
+  graph_3 <- c(graph_3, list(g_1))
+}
+
+##wave 1
+fis_sub_1$neighbor <- NA
+
+###wave 1
+all_g_1 <- list() #combine all ego dataframe of all grades of wave 1
+for (g in 1:29){
+  temp_g <- graph_1[[g]]
+  temp_el <- el_1[[g]]
+  temp_g_list <- list()
+  
+  for (i in V(temp_g)$name){
+    temp_list <- c()
+    temp <- temp_el[which(temp_el$from==i),]
+    temp_list <- append(temp_list, temp[,2])
+    temp <- temp_el[which(temp_el$to==i),]
+    temp_list <- append(temp_list, temp[,1])
+    temp_list <- unique(temp_list)
+    
+    if (i %in% fis_sub_1$id_p){
+      fis_sub_1[which(fis_sub_1$id_p==i),"neighbor"] <- length(temp_list)
+    }
+    
+    df <- data.frame(ego = c(i, temp_list),
+                     e1 = NA,
+                     e2 = NA)
+    for (j in 1:nrow(df)){
+      df[j,"e1"] <- ifelse(df[j,1] %in% fis_sub_1$id_p, fis_sub_1[which(fis_sub_1$id_p==df[j,1]),"e1"],"9999")
+      df[j,"e2"] <- ifelse(df[j,1] %in% fis_sub_1$id_p, fis_sub_1[which(fis_sub_1$id_p==df[j,1]),"e2"],"9999")
+    }
+    df <- df[is.na(df$ego)==F,]
+    
+    temp_g_list <- c(temp_g_list, list(df))
+  }
+  all_g_1 <- c(all_g_1, list(temp_g_list))
+  
+}
+##
+
+fis_sub_1$bridge <- NA
+fis_sub_1$strict <- NA
+fis_sub_1$generalized <- NA
+fis_sub_1$g_major <- NA
+fis_sub_1$g_minor <- NA
+fis_sub_1$prop_g_major <- NA
+fis_sub_1$prop_g_minor <- NA
+fis_sub_1$max_s <- NA
+fis_sub_1$max_g <- NA
+fis_sub_1$prop_s <- NA
+fis_sub_1$prop_g <- NA
+
+for (g in 1:29){
+  temp_list <- all_g_1[[g]]
+  
+  for (i in temp_list){
+    temp_results <- bridge_count(i)
+    temp_ego <- i[1,1]
+    if (temp_ego %in% fis_sub_1$id_p){
+      fis_sub_1[which(fis_sub_1$id_p==temp_ego),"bridge"] <- temp_results[1]
+      fis_sub_1[which(fis_sub_1$id_p==temp_ego),"strict"] <- temp_results[2]
+      fis_sub_1[which(fis_sub_1$id_p==temp_ego),"generalized"] <- temp_results[3]
+      fis_sub_1[which(fis_sub_1$id_p==temp_ego),"g_major"] <- temp_results[4]
+      fis_sub_1[which(fis_sub_1$id_p==temp_ego),"g_minor"] <- temp_results[5]
+      fis_sub_1[which(fis_sub_1$id_p==temp_ego),"prop_g_major"] <- fis_sub_1[which(fis_sub_1$id_p==temp_ego),"g_major"] / fis_sub_1[which(fis_sub_1$id_p==temp_ego),"generalized"]
+      fis_sub_1[which(fis_sub_1$id_p==temp_ego),"prop_g_minor"] <- fis_sub_1[which(fis_sub_1$id_p==temp_ego),"g_minor"] / fis_sub_1[which(fis_sub_1$id_p==temp_ego),"generalized"]
+    }
+    
+  }
+  
+  print("finish h1")
+  
+  ##create a distribution table of ethnicity of this grade
+  eth_dis <- data.frame(e1 = c(),
+                        e2 = c(),
+                        freq = c())
+  v1<- names(table(fis_sub_1[which(fis_sub_1$id_g==g),]$e1))
+  for (o in v1){
+    t_df <- data.frame(e1 = o,
+                       e2 = "9999",
+                       freq = length(which(fis_sub_1[which(fis_sub_1$id_g==g),]$e1== o & fis_sub_1[which(fis_sub_1$id_g==g),]$e2=="9999")))
+    eth_dis <- rbind(eth_dis, t_df)
+  }
+  v2<- names(table(fis_sub_1[which(fis_sub_1$id_g==g),]$e2))
+  for (n in v2){
+    t_df <- data.frame(e1 = "1",
+                       e2 = n,
+                       freq = length(which(fis_sub_1[which(fis_sub_1$id_g==g),]$e1== "1" & fis_sub_1[which(fis_sub_1$id_g==g),]$e2== n)))
+    eth_dis <- rbind(eth_dis, t_df)
+  }
+  eth_dis <- unique(eth_dis)
+  eth_dis <- eth_dis[which(eth_dis$e1!="9999"),]
+  eth_dis$types <- paste(eth_dis$e1, eth_dis$e2, sep = "&")
+  
+  print("finish eth_dis")
+  #now we have a dataframe containing the distribution of all types
+  
+  dual_egos <- fis_sub_1[which(fis_sub_1$dual==1 & fis_sub_1$id_g==g),"id_p"][[1]]
+  dual_temp_list <- list()
+  for (a in temp_list){
+    if (a[1,1] %in% dual_egos){
+      dual_temp_list <- c(dual_temp_list, list(a))
+    }
+  }
+  
+  for (m in 1:length(dual_temp_list)){
+    sub_temp_list <- dual_temp_list[[m]]
+    dual_ego <- sub_temp_list[1,1]
+    deg_ego <- fis_sub_1[which(fis_sub_1$id_p==dual_ego),"neighbor"][[1]]#get the degree of the ego
+    ego_e2 <- fis_sub_1[which(fis_sub_1$id_p== dual_ego),"e2"][[1]]
+    
+    strict_dis <- rbind(eth_dis[which(eth_dis$e1=="1" & eth_dis$e2=="9999"),],
+                        eth_dis[which(eth_dis$e1=="1" & eth_dis$e2==ego_e2),],
+                        eth_dis[which(eth_dis$e1==ego_e2 & eth_dis$e2=="9999"),])
+    strict_dis[which(strict_dis$e1=="1" & strict_dis$e2==ego_e2),"freq"] <- strict_dis[which(strict_dis$e1=="1" & strict_dis$e2==ego_e2),"freq"] - 1
+    strict_types <- strict_dis$types
+    strict_counts <- strict_dis$freq
+    strict_results <- max_diverse_distribution(strict_counts, strict_types, deg_ego)
+    fis_sub_1[which(fis_sub_1$id_p==dual_ego),"max_s"] <- strict_results$bridge
+    
+    gen_dis <- rbind(eth_dis[which(eth_dis$e1=="1" & eth_dis$e2=="9999"),],
+                     eth_dis[which(eth_dis$e1=="1" & eth_dis$e2!=ego_e2),],
+                     eth_dis[which(eth_dis$e1!=ego_e2 & eth_dis$e2=="9999"),])
+    gen_dis <- unique(gen_dis)
+    gen_types <- gen_dis$types
+    gen_counts <- gen_dis$freq
+    gen_results <- max_diverse_distribution(gen_counts, gen_types, deg_ego)
+    fis_sub_1[which(fis_sub_1$id_p==dual_ego),"max_g"] <- gen_results$bridge
+  }
+  
+  print(g) ##track the process 
+}
+
+#fis_sub_1$prop_g <- fis_sub_1$generalized / fis_sub_1$max_g
+#fis_sub_1$prop_s <- fis_sub_1$strict / fis_sub_1$max_s
+
+##because we have 9999 values, the proportion values are problematic
+##so I replace 9999 with NA, and re-calculate the proportions
+fis_sub_1[fis_sub_1==9999]<-NA
+
+fis_sub_1$prop_g <- fis_sub_1$generalized / fis_sub_1$max_g
+fis_sub_1$prop_s <- fis_sub_1$strict / fis_sub_1$max_s
+
+#if either proportion is NaN, then both columns are transformed into NA
+#so they would not be picked out for comparison
+nan_indices <- is.nan(fis_sub_1$prop_s)
+fis_sub_1$prop_s[nan_indices] <- NA
+nan_indices <- is.nan(fis_sub_1$prop_g)
+fis_sub_1$prop_g[nan_indices] <- NA
+for (i in 1:nrow(fis_sub_1)){
+  if (is.na(fis_sub_1[i,"prop_s"]) | is.na(fis_sub_1[i,"prop_g"])){
+    fis_sub_1[i,"prop_s"] <- NA
+    fis_sub_1[i,"prop_g"] <- NA
+  }
+}
+#additional test
+fis_sub_1$prop_g_major <- (fis_sub_1$g_major) / (fis_sub_1$generalized)
+
+mean(fis_sub_1$prop_g_major, na.rm=T) #0.5249098
+
+fis_sub_1$prop_g_minor <- (fis_sub_1$g_minor) / (fis_sub_1$generalized)
+
+mean(fis_sub_1$prop_g_minor, na.rm=T) #0.03606702
+
+##wave 2
+fis_sub_2$neighbor <- NA
+
+all_g_2 <- list() #combine all ego dataframe of all grades of wave 1
+for (g in 1:29){
+  temp_g <- graph_2[[g]]
+  temp_el <- el_2[[g]]
+  temp_g_list <- list()
+  
+  for (i in V(temp_g)$name){
+    temp_list <- c()
+    temp <- temp_el[which(temp_el$from==i),]
+    temp_list <- append(temp_list, temp[,2])
+    temp <- temp_el[which(temp_el$to==i),]
+    temp_list <- append(temp_list, temp[,1])
+    temp_list <- unique(temp_list)
+    
+    if (i %in% fis_sub_2$id_p){
+      fis_sub_2[which(fis_sub_2$id_p==i),"neighbor"] <- length(temp_list)
+    }
+    
+    df <- data.frame(ego = c(i, temp_list),
+                     e1 = NA,
+                     e2 = NA)
+    for (j in 1:nrow(df)){
+      df[j,"e1"] <- ifelse(df[j,1] %in% fis_sub_2$id_p, fis_sub_2[which(fis_sub_2$id_p==df[j,1]),"e1"],"9999")
+      df[j,"e2"] <- ifelse(df[j,1] %in% fis_sub_2$id_p, fis_sub_2[which(fis_sub_2$id_p==df[j,1]),"e2"],"9999")
+    }
+    df <- df[is.na(df$ego)==F,]
+    
+    temp_g_list <- c(temp_g_list, list(df))
+  }
+  all_g_2 <- c(all_g_2, list(temp_g_list))
+  
+}
+
+
+fis_sub_2$bridge <- NA
+fis_sub_2$strict <- NA
+fis_sub_2$generalized <- NA
+fis_sub_2$g_major <- NA
+fis_sub_2$g_minor <- NA
+fis_sub_2$prop_g_major <- NA
+fis_sub_2$prop_g_minor <- NA
+fis_sub_2$max_s <- NA
+fis_sub_2$max_g <- NA
+fis_sub_2$prop_s <- NA
+fis_sub_2$prop_g <- NA
+
+for (g in 1:29){
+  temp_list <- all_g_2[[g]]
+  
+  for (i in temp_list){
+    temp_results <- bridge_count(i)
+    temp_ego <- i[1,1]
+    if (temp_ego %in% fis_sub_2$id_p){
+      fis_sub_2[which(fis_sub_2$id_p==temp_ego),"bridge"] <- temp_results[1]
+      fis_sub_2[which(fis_sub_2$id_p==temp_ego),"strict"] <- temp_results[2]
+      fis_sub_2[which(fis_sub_2$id_p==temp_ego),"generalized"] <- temp_results[3]
+      fis_sub_2[which(fis_sub_2$id_p==temp_ego),"g_major"] <- temp_results[4]
+      fis_sub_2[which(fis_sub_2$id_p==temp_ego),"g_minor"] <- temp_results[5]
+      fis_sub_2[which(fis_sub_2$id_p==temp_ego),"prop_g_major"] <- fis_sub_2[which(fis_sub_2$id_p==temp_ego),"g_major"] / fis_sub_2[which(fis_sub_2$id_p==temp_ego),"generalized"]
+      fis_sub_2[which(fis_sub_2$id_p==temp_ego),"prop_g_minor"] <- fis_sub_2[which(fis_sub_2$id_p==temp_ego),"g_minor"] / fis_sub_2[which(fis_sub_2$id_p==temp_ego),"generalized"]
+      
+    }
+    
+  }
+  
+  print("finish h1")
+  
+  ##create a distribution table of ethnicity of this grade
+  eth_dis <- data.frame(e1 = c(),
+                        e2 = c(),
+                        freq = c())
+  v1<- names(table(fis_sub_2[which(fis_sub_2$id_g==g),]$e1))
+  for (o in v1){
+    t_df <- data.frame(e1 = o,
+                       e2 = "9999",
+                       freq = length(which(fis_sub_2[which(fis_sub_2$id_g==g),]$e1== o & fis_sub_2[which(fis_sub_2$id_g==g),]$e2=="9999")))
+    eth_dis <- rbind(eth_dis, t_df)
+  }
+  v2<- names(table(fis_sub_2[which(fis_sub_2$id_g==g),]$e2))
+  for (n in v2){
+    t_df <- data.frame(e1 = "1",
+                       e2 = n,
+                       freq = length(which(fis_sub_2[which(fis_sub_2$id_g==g),]$e1== "1" & fis_sub_2[which(fis_sub_2$id_g==g),]$e2== n)))
+    eth_dis <- rbind(eth_dis, t_df)
+  }
+  eth_dis <- unique(eth_dis)
+  eth_dis <- eth_dis[which(eth_dis$e1!="9999"),]
+  eth_dis$types <- paste(eth_dis$e1, eth_dis$e2, sep = "&")
+  
+  print("finish eth_dis")
+  #now we have a dataframe containing the distribution of all types
+  
+  dual_egos <- fis_sub_2[which(fis_sub_2$dual==1 & fis_sub_2$id_g==g),"id_p"][[1]]
+  dual_temp_list <- list()
+  for (a in temp_list){
+    if (a[1,1] %in% dual_egos){
+      dual_temp_list <- c(dual_temp_list, list(a))
+    }
+  }
+  
+  for (m in 1:length(dual_temp_list)){
+    sub_temp_list <- dual_temp_list[[m]]
+    dual_ego <- sub_temp_list[1,1]
+    deg_ego <- fis_sub_2[which(fis_sub_2$id_p==dual_ego),"neighbor"][[1]]#get the degree of the ego
+    ego_e2 <- fis_sub_2[which(fis_sub_2$id_p== dual_ego),"e2"][[1]]
+    
+    strict_dis <- rbind(eth_dis[which(eth_dis$e1=="1" & eth_dis$e2=="9999"),],
+                        eth_dis[which(eth_dis$e1=="1" & eth_dis$e2==ego_e2),],
+                        eth_dis[which(eth_dis$e1==ego_e2 & eth_dis$e2=="9999"),])
+    strict_dis[which(strict_dis$e1=="1" & strict_dis$e2==ego_e2),"freq"] <- strict_dis[which(strict_dis$e1=="1" & strict_dis$e2==ego_e2),"freq"] - 1
+    strict_types <- strict_dis$types
+    strict_counts <- strict_dis$freq
+    strict_results <- max_diverse_distribution(strict_counts, strict_types, deg_ego)
+    fis_sub_2[which(fis_sub_2$id_p==dual_ego),"max_s"] <- strict_results$bridge
+    
+    gen_dis <- rbind(eth_dis[which(eth_dis$e1=="1" & eth_dis$e2=="9999"),],
+                     eth_dis[which(eth_dis$e1=="1" & eth_dis$e2!=ego_e2),],
+                     eth_dis[which(eth_dis$e1!=ego_e2 & eth_dis$e2=="9999"),])
+    gen_dis <- unique(gen_dis)
+    gen_types <- gen_dis$types
+    gen_counts <- gen_dis$freq
+    gen_results <- max_diverse_distribution(gen_counts, gen_types, deg_ego)
+    fis_sub_2[which(fis_sub_2$id_p==dual_ego),"max_g"] <- gen_results$bridge
+  }
+  
+  print(g) ##track the process 
+}
+
+
+##because we have 9999 values, the proportion values are problematic
+##so I replace 9999 with NA, and re-calculate the proportions
+fis_sub_2[fis_sub_2==9999]<-NA
+
+fis_sub_2$prop_g <- fis_sub_2$generalized / fis_sub_2$max_g
+fis_sub_2$prop_s <- fis_sub_2$strict / fis_sub_2$max_s
+
+#if either proportion is NaN, then both columns are transformed into NA
+#so they would not be picked out for comparison
+nan_indices <- is.nan(fis_sub_2$prop_s)
+fis_sub_2$prop_s[nan_indices] <- NA
+nan_indices <- is.nan(fis_sub_2$prop_g)
+fis_sub_2$prop_g[nan_indices] <- NA
+for (i in 1:nrow(fis_sub_2)){
+  if (is.na(fis_sub_2[i,"prop_s"]) | is.na(fis_sub_2[i,"prop_g"])){
+    fis_sub_2[i,"prop_s"] <- NA
+    fis_sub_2[i,"prop_g"] <- NA
+  }
+}
+
+fis_sub_2$prop_g_major <- (fis_sub_2$g_major) / (fis_sub_2$generalized)
+
+mean(fis_sub_2$prop_g_major, na.rm=T) #0.4966783
+
+fis_sub_2$prop_g_minor <- (fis_sub_2$g_minor) / (fis_sub_2$generalized)
+
+mean(fis_sub_2$prop_g_minor, na.rm=T) #0.04302426
+
+
+##wave 3
+##wave 3
+fis_sub_3$neighbor <- NA
+
+###wave 3
+all_g_3 <- list() #combine all ego dataframe of all grades of wave 1
+for (g in 1:29){
+  temp_g <- graph_3[[g]]
+  temp_el <- el_3[[g]]
+  temp_g_list <- list()
+  
+  for (i in V(temp_g)$name){
+    temp_list <- c()
+    temp <- temp_el[which(temp_el$from==i),]
+    temp_list <- append(temp_list, temp[,2])
+    temp <- temp_el[which(temp_el$to==i),]
+    temp_list <- append(temp_list, temp[,1])
+    temp_list <- unique(temp_list)
+    
+    if (i %in% fis_sub_3$id_p){
+      fis_sub_3[which(fis_sub_3$id_p==i),"neighbor"] <- length(temp_list)
+    }
+    
+    df <- data.frame(ego = c(i, temp_list),
+                     e1 = NA,
+                     e2 = NA)
+    for (j in 1:nrow(df)){
+      df[j,"e1"] <- ifelse(df[j,1] %in% fis_sub_3$id_p, fis_sub_3[which(fis_sub_3$id_p==df[j,1]),"e1"],"9999")
+      df[j,"e2"] <- ifelse(df[j,1] %in% fis_sub_3$id_p, fis_sub_3[which(fis_sub_3$id_p==df[j,1]),"e2"],"9999")
+    }
+    df <- df[is.na(df$ego)==F,]
+    
+    temp_g_list <- c(temp_g_list, list(df))
+  }
+  all_g_3 <- c(all_g_3, list(temp_g_list))
+  
+}
+
+fis_sub_3$bridge <- NA
+fis_sub_3$strict <- NA
+fis_sub_3$generalized <- NA
+fis_sub_3$g_major <- NA
+fis_sub_3$g_minor <- NA
+fis_sub_3$prop_g_major <- NA
+fis_sub_3$prop_g_minor <- NA
+fis_sub_3$max_s <- NA
+fis_sub_3$max_g <- NA
+fis_sub_3$prop_s <- NA
+fis_sub_3$prop_g <- NA
+
+
+for (g in 1:29){
+  temp_list <- all_g_3[[g]]
+  
+  for (i in temp_list){
+    temp_results <- bridge_count(i)
+    temp_ego <- i[1,1]
+    if (temp_ego %in% fis_sub_3$id_p){
+      fis_sub_3[which(fis_sub_3$id_p==temp_ego),"bridge"] <- temp_results[1]
+      fis_sub_3[which(fis_sub_3$id_p==temp_ego),"strict"] <- temp_results[2]
+      fis_sub_3[which(fis_sub_3$id_p==temp_ego),"generalized"] <- temp_results[3]
+      fis_sub_3[which(fis_sub_3$id_p==temp_ego),"g_major"] <- temp_results[4]
+      fis_sub_3[which(fis_sub_3$id_p==temp_ego),"g_minor"] <- temp_results[5]
+      fis_sub_3[which(fis_sub_3$id_p==temp_ego),"prop_g_major"] <- fis_sub_3[which(fis_sub_3$id_p==temp_ego),"g_major"] / fis_sub_3[which(fis_sub_3$id_p==temp_ego),"generalized"]
+      fis_sub_3[which(fis_sub_3$id_p==temp_ego),"prop_g_minor"] <- fis_sub_3[which(fis_sub_3$id_p==temp_ego),"g_minor"] / fis_sub_3[which(fis_sub_3$id_p==temp_ego),"generalized"]
+      
+    }
+    
+  }
+  
+  print("finish h1")
+  
+  ##create a distribution table of ethnicity of this grade
+  eth_dis <- data.frame(e1 = c(),
+                        e2 = c(),
+                        freq = c())
+  v1<- names(table(fis_sub_3[which(fis_sub_3$id_g==g),]$e1))
+  for (o in v1){
+    t_df <- data.frame(e1 = o,
+                       e2 = "9999",
+                       freq = length(which(fis_sub_3[which(fis_sub_3$id_g==g),]$e1== o & fis_sub_3[which(fis_sub_3$id_g==g),]$e2=="9999")))
+    eth_dis <- rbind(eth_dis, t_df)
+  }
+  v2<- names(table(fis_sub_3[which(fis_sub_3$id_g==g),]$e2))
+  for (n in v2){
+    t_df <- data.frame(e1 = "1",
+                       e2 = n,
+                       freq = length(which(fis_sub_3[which(fis_sub_3$id_g==g),]$e1== "1" & fis_sub_3[which(fis_sub_3$id_g==g),]$e2== n)))
+    eth_dis <- rbind(eth_dis, t_df)
+  }
+  eth_dis <- unique(eth_dis)
+  eth_dis <- eth_dis[which(eth_dis$e1!="9999"),]
+  eth_dis$types <- paste(eth_dis$e1, eth_dis$e2, sep = "&")
+  
+  print("finish eth_dis")
+  #now we have a dataframe containing the distribution of all types
+  
+  dual_egos <- fis_sub_3[which(fis_sub_3$dual==1 & fis_sub_3$id_g==g),"id_p"][[1]]
+  dual_temp_list <- list()
+  for (a in temp_list){
+    if (a[1,1] %in% dual_egos){
+      dual_temp_list <- c(dual_temp_list, list(a))
+    }
+  }
+  
+  for (m in 1:length(dual_temp_list)){
+    sub_temp_list <- dual_temp_list[[m]]
+    dual_ego <- sub_temp_list[1,1]
+    deg_ego <- fis_sub_3[which(fis_sub_3$id_p==dual_ego),"neighbor"][[1]]#get the degree of the ego
+    ego_e2 <- fis_sub_3[which(fis_sub_3$id_p== dual_ego),"e2"][[1]]
+    
+    strict_dis <- rbind(eth_dis[which(eth_dis$e1=="1" & eth_dis$e2=="9999"),],
+                        eth_dis[which(eth_dis$e1=="1" & eth_dis$e2==ego_e2),],
+                        eth_dis[which(eth_dis$e1==ego_e2 & eth_dis$e2=="9999"),])
+    strict_dis[which(strict_dis$e1=="1" & strict_dis$e2==ego_e2),"freq"] <- strict_dis[which(strict_dis$e1=="1" & strict_dis$e2==ego_e2),"freq"] - 1
+    strict_types <- strict_dis$types
+    strict_counts <- strict_dis$freq
+    strict_results <- max_diverse_distribution(strict_counts, strict_types, deg_ego)
+    fis_sub_3[which(fis_sub_3$id_p==dual_ego),"max_s"] <- strict_results$bridge
+    
+    gen_dis <- rbind(eth_dis[which(eth_dis$e1=="1" & eth_dis$e2=="9999"),],
+                     eth_dis[which(eth_dis$e1=="1" & eth_dis$e2!=ego_e2),],
+                     eth_dis[which(eth_dis$e1!=ego_e2 & eth_dis$e2=="9999"),])
+    gen_dis <- unique(gen_dis)
+    gen_types <- gen_dis$types
+    gen_counts <- gen_dis$freq
+    gen_results <- max_diverse_distribution(gen_counts, gen_types, deg_ego)
+    fis_sub_3[which(fis_sub_3$id_p==dual_ego),"max_g"] <- gen_results$bridge
+  }
+  
+  print(g) ##track the process 
+}
+
+##because we have 9999 values, the proportion values are problematic
+##so I replace 9999 with NA, and re-calculate the proportions
+fis_sub_3[fis_sub_3==9999]<-NA
+
+fis_sub_3$prop_g <- fis_sub_3$generalized / fis_sub_3$max_g
+fis_sub_3$prop_s <- fis_sub_3$strict / fis_sub_3$max_s
+
+#if either proportion is NaN, then both columns are transformed into NA
+#so they would not be picked out for comparison
+nan_indices <- is.nan(fis_sub_3$prop_s)
+fis_sub_3$prop_s[nan_indices] <- NA
+nan_indices <- is.nan(fis_sub_3$prop_g)
+fis_sub_3$prop_g[nan_indices] <- NA
+for (i in 1:nrow(fis_sub_3)){
+  if (is.na(fis_sub_3[i,"prop_s"]) | is.na(fis_sub_3[i,"prop_g"])){
+    fis_sub_3[i,"prop_s"] <- NA
+    fis_sub_3[i,"prop_g"] <- NA
+  }
+}
+
+
+fis_sub_3$prop_g_major <- (fis_sub_3$g_major) / (fis_sub_3$generalized)
+
+mean(fis_sub_3$prop_g_major, na.rm=T) #0.5065347
+
+fis_sub_3$prop_g_minor <- (fis_sub_3$g_minor) / (fis_sub_3$generalized)
+
+mean(fis_sub_3$prop_g_minor, na.rm=T) #0.05031081
+
+#
+##h1 test: group comparisons
+##group comparison
+
+##wave 1
+result_1 <- data.frame(grade = 1:29,
+                       m_major = rep(NA, 29),
+                       m_minor = rep(NA, 29),
+                       dual = rep(NA, 29),
+                       mono = rep(NA, 29),
+                       p_dual_mono = rep(NA, 29),
+                       p_major_dual = rep(NA, 29),
+                       p_minor_dual = rep(NA, 29),
+                       e_dual_mono = rep(NA, 29),
+                       e_major_dual = rep(NA, 29),
+                       e_minor_dual = rep(NA, 29),
+                       d_comp = rep(NA, 29),
+                       d_major = rep(NA, 29),
+                       d_minor = rep(NA, 29),
+                       d_inter = rep(NA, 29))
+for (i in 1:29){
+  temp_df <- fis_sub_1[which(fis_sub_1$id_g==i),]
+  m_major_group <- temp_df[which(temp_df$m_major==1),"bridge"][[1]]
+  m_minor_group <- temp_df[which(temp_df$m_minor==1),"bridge"][[1]]
+  d_major_group <- temp_df[which(temp_df$d_major==1),"bridge"][[1]]
+  d_minor_group <- temp_df[which(temp_df$d_minor==1),"bridge"][[1]]
+  d_comp_group <- temp_df[which(temp_df$d_comp==1),"bridge"][[1]]
+  d_inter_group <- temp_df[which(temp_df$d_inter==1),"bridge"][[1]]
+  dual_group <- temp_df[which(temp_df$dual==1),"bridge"][[1]]
+  mono_group <- temp_df[which(temp_df$dual==0),"bridge"][[1]]
+  
+  result_1[i,"m_major"] <- mean(m_major_group, na.rm=T)
+  result_1[i,"m_minor"] <- mean(m_minor_group, na.rm=T)
+  result_1[i,"d_major"] <- mean(d_major_group, na.rm=T)
+  result_1[i,"d_minor"] <- mean(d_minor_group, na.rm=T)
+  result_1[i,"d_comp"] <- mean(d_comp_group, na.rm=T)
+  result_1[i,"d_inter"] <- mean(d_inter_group, na.rm=T)
+  result_1[i,"dual"] <- mean(dual_group, na.rm=T)
+  result_1[i,"mono"] <- mean(mono_group, na.rm=T)
+  result_1[i,"p_dual_mono"] <- t.test(dual_group, mono_group)$p.value
+  result_1[i,"p_major_dual"] <- t.test(dual_group, m_major_group)$p.value
+  result_1[i, "p_minor_dual"] <- ifelse(
+    is.na(result_1[i, "m_minor"]), 
+    NA, 
+    tryCatch(t.test(dual_group, m_minor_group)$p.value, error = function(e) NA)
+  )
+  result_1[i,"e_dual_mono"] <- result_1[i,"dual"]-result_1[i,"mono"]
+  result_1[i,"e_major_dual"] <- result_1[i,"dual"]-result_1[i,"m_major"]
+  result_1[i,"e_minor_dual"] <- ifelse(is.na(result_1[i,"p_minor_dual"]),NA,result_1[i,"dual"]-result_1[i,"m_minor"])
+}
+
+#these results are shown in the paper
+#wave-level comparison
+t.test(result_1$m_major, result_1$dual,paired=T) #-3.301485 p.value=0.007392
+t.test(result_1$mono, result_1$dual,paired=T) #-3.541526  p.value=0.002143
+t.test(result_1$m_minor, result_1$dual,paired=T) #-3.474673 p.value=0.06216 #very close to significance
+
+##wave 2
+result_2 <- data.frame(grade = 1:29,
+                       m_major = rep(NA, 29),
+                       m_minor = rep(NA, 29),
+                       dual = rep(NA, 29),
+                       mono = rep(NA, 29),
+                       p_dual_mono = rep(NA, 29),
+                       p_major_dual = rep(NA, 29),
+                       p_minor_dual = rep(NA, 29),
+                       e_dual_mono = rep(NA, 29),
+                       e_major_dual = rep(NA, 29),
+                       e_minor_dual = rep(NA, 29),
+                       d_comp = rep(NA, 29),
+                       d_major = rep(NA, 29),
+                       d_minor = rep(NA, 29),
+                       d_inter = rep(NA, 29))
+for (i in 1:29){
+  temp_df <- fis_sub_2[which(fis_sub_2$id_g==i),]
+  m_major_group <- temp_df[which(temp_df$m_major==1),"bridge"][[1]]
+  m_minor_group <- temp_df[which(temp_df$m_minor==1),"bridge"][[1]]
+  d_major_group <- temp_df[which(temp_df$d_major==1),"bridge"][[1]]
+  d_minor_group <- temp_df[which(temp_df$d_minor==1),"bridge"][[1]]
+  d_comp_group <- temp_df[which(temp_df$d_comp==1),"bridge"][[1]]
+  d_inter_group <- temp_df[which(temp_df$d_inter==1),"bridge"][[1]]
+  dual_group <- temp_df[which(temp_df$dual==1),"bridge"][[1]]
+  mono_group <- temp_df[which(temp_df$dual==0),"bridge"][[1]]
+  
+  result_2[i,"m_major"] <- mean(m_major_group, na.rm=T)
+  result_2[i,"m_minor"] <- mean(m_minor_group, na.rm=T)
+  result_2[i,"d_major"] <- mean(d_major_group, na.rm=T)
+  result_2[i,"d_minor"] <- mean(d_minor_group, na.rm=T)
+  result_2[i,"d_comp"] <- mean(d_comp_group, na.rm=T)
+  result_2[i,"d_inter"] <- mean(d_inter_group, na.rm=T)
+  result_2[i,"dual"] <- mean(dual_group, na.rm=T)
+  result_2[i,"mono"] <- mean(mono_group, na.rm=T)
+  result_2[i,"p_dual_mono"] <- t.test(dual_group, mono_group)$p.value
+  result_2[i,"p_major_dual"] <- t.test(dual_group, m_major_group)$p.value
+  result_2[i, "p_minor_dual"] <- ifelse(
+    is.na(result_2[i, "m_minor"]), 
+    NA, 
+    tryCatch(t.test(dual_group, m_minor_group)$p.value, error = function(e) NA)
+  )
+  result_2[i,"e_dual_mono"] <- result_2[i,"dual"]-result_2[i,"mono"]
+  result_2[i,"e_major_dual"] <- result_2[i,"dual"]-result_2[i,"m_major"]
+  result_2[i,"e_minor_dual"] <- ifelse(is.na(result_2[i,"p_minor_dual"]),NA,result_2[i,"dual"]-result_2[i,"m_minor"])
+}
+#wave-level comparison
+t.test(result_2$m_major, result_2$dual,paired=T) #-3.668326  p-value = 0.0008824
+t.test(result_2$mono, result_2$dual,paired=T) #-3.33184  p-value = 0.000885
+t.test(result_2$m_minor, result_2$dual,paired=T) #-0.6478162 p-value = 0.7333 #m_minor build many bridges
+
+##wave 3
+result_3 <- data.frame(grade = 1:29,
+                       m_major = rep(NA, 29),
+                       m_minor = rep(NA, 29),
+                       dual = rep(NA, 29),
+                       mono = rep(NA, 29),
+                       p_dual_mono = rep(NA, 29),
+                       p_major_dual = rep(NA, 29),
+                       p_minor_dual = rep(NA, 29),
+                       e_dual_mono = rep(NA, 29),
+                       e_major_dual = rep(NA, 29),
+                       e_minor_dual = rep(NA, 29),
+                       d_comp = rep(NA, 29),
+                       d_major = rep(NA, 29),
+                       d_minor = rep(NA, 29),
+                       d_inter = rep(NA, 29))
+for (i in 1:29){
+  temp_df <- fis_sub_3[which(fis_sub_3$id_g==i),]
+  m_major_group <- temp_df[which(temp_df$m_major==1),"bridge"][[1]]
+  m_minor_group <- temp_df[which(temp_df$m_minor==1),"bridge"][[1]]
+  d_major_group <- temp_df[which(temp_df$d_major==1),"bridge"][[1]]
+  d_minor_group <- temp_df[which(temp_df$d_minor==1),"bridge"][[1]]
+  d_comp_group <- temp_df[which(temp_df$d_comp==1),"bridge"][[1]]
+  d_inter_group <- temp_df[which(temp_df$d_inter==1),"bridge"][[1]]
+  dual_group <- temp_df[which(temp_df$dual==1),"bridge"][[1]]
+  mono_group <- temp_df[which(temp_df$dual==0),"bridge"][[1]]
+  
+  result_3[i,"m_major"] <- mean(m_major_group, na.rm=T)
+  result_3[i,"m_minor"] <- mean(m_minor_group, na.rm=T)
+  result_3[i,"d_major"] <- mean(d_major_group, na.rm=T)
+  result_3[i,"d_minor"] <- mean(d_minor_group, na.rm=T)
+  result_3[i,"d_comp"] <- mean(d_comp_group, na.rm=T)
+  result_3[i,"d_inter"] <- mean(d_inter_group, na.rm=T)
+  result_3[i,"dual"] <- mean(dual_group, na.rm=T)
+  result_3[i,"mono"] <- mean(mono_group, na.rm=T)
+  result_3[i,"p_dual_mono"] <- t.test(dual_group, mono_group)$p.value
+  result_3[i,"p_major_dual"] <- t.test(dual_group, m_major_group)$p.value
+  result_3[i, "p_minor_dual"] <- ifelse(
+    is.na(result_3[i, "m_minor"]), 
+    NA, 
+    tryCatch(t.test(dual_group, m_minor_group)$p.value, error = function(e) NA)
+  )
+  result_3[i,"e_dual_mono"] <- result_3[i,"dual"]-result_3[i,"mono"]
+  result_3[i,"e_major_dual"] <- result_3[i,"dual"]-result_3[i,"m_major"]
+  result_3[i,"e_minor_dual"] <- ifelse(is.na(result_3[i,"p_minor_dual"]),NA,result_3[i,"dual"]-result_3[i,"m_minor"])
+}
+#wave-level comparison
+t.test(result_3$m_major, result_3$dual,paired=T) #-4.129138  p-value = 0.0005891
+t.test(result_3$mono, result_3$dual,paired=T) #-3.341596  p-value = 0.0006293
+t.test(result_3$m_minor, result_3$dual,paired=T) #-0.6044915 p-value = 0.6156 
+
+
+##general table
+h1_result <- list(result_1, result_2, result_3)
+general_h1 <- data.frame(wave = 1:3,
+                         e_mono_dual = 1:3,
+                         p_mono_dual = 1:3,
+                         e_major_dual = 1:3,
+                         p_major_dual = 1:3,
+                         e_minor_dual = 1:3,
+                         p_minor_dual = 1:3)
+for (i in 1:3){
+  df <- h1_result[[i]]
+  general_h1[i,2] <- t.test(df$mono, df$dual,paired=T)$estimate[[1]]
+  general_h1[i,3] <- t.test(df$mono, df$dual,paired=T)$p.value
+  general_h1[i,4] <- t.test(df$m_major, df$dual,paired=T)$estimate[[1]]
+  general_h1[i,5] <- t.test(df$m_major, df$dual,paired=T)$p.value
+  general_h1[i,6] <- t.test(df$m_minor, df$dual,paired=T)$estimate[[1]]
+  general_h1[i,7] <- t.test(df$m_minor, df$dual,paired=T)$p.value
+}
+
+
+#therefore, all three waves show strong difference between groups, but the difference
+#is largely contributed by mono_majority groups who show very strong homophily effect
+
+h1_descriptive <- data.frame(wave = 1:3,
+                             mono = rep(NA,3),
+                             dual = rep(NA,3),
+                             m_major = rep(NA,3),
+                             m_minor = rep(NA,3))
+
+h1_descriptive[1,"mono"] <- mean(fis_sub_1[which(fis_sub_1$dual==0),"bridge"][[1]],na.rm=T)
+h1_descriptive[1,"dual"] <- mean(fis_sub_1[which(fis_sub_1$dual==1),"bridge"][[1]],na.rm=T)
+h1_descriptive[1,"m_major"] <- mean(fis_sub_1[which(fis_sub_1$m_major==1),"bridge"][[1]],na.rm=T)
+h1_descriptive[1,"m_minor"] <- mean(fis_sub_1[which(fis_sub_1$m_minor==1),"bridge"][[1]],na.rm=T)
+
+h1_descriptive[2,"mono"] <- mean(fis_sub_2[which(fis_sub_2$dual==0),"bridge"][[1]],na.rm=T)
+h1_descriptive[2,"dual"] <- mean(fis_sub_2[which(fis_sub_2$dual==1),"bridge"][[1]],na.rm=T)
+h1_descriptive[2,"m_major"] <- mean(fis_sub_2[which(fis_sub_2$m_major==1),"bridge"][[1]],na.rm=T)
+h1_descriptive[2,"m_minor"] <- mean(fis_sub_2[which(fis_sub_2$m_minor==1),"bridge"][[1]],na.rm=T)
+
+h1_descriptive[3,"mono"] <- mean(fis_sub_3[which(fis_sub_3$dual==0),"bridge"][[1]],na.rm=T)
+h1_descriptive[3,"dual"] <- mean(fis_sub_3[which(fis_sub_3$dual==1),"bridge"][[1]],na.rm=T)
+h1_descriptive[3,"m_major"] <- mean(fis_sub_3[which(fis_sub_3$m_major==1),"bridge"][[1]],na.rm=T)
+h1_descriptive[3,"m_minor"] <- mean(fis_sub_3[which(fis_sub_3$m_minor==1),"bridge"][[1]],na.rm=T)
+
+##here we can still reject that the difference is lied between majority/minority
+#because the mean of m_minor groups are still less than dual group
+
+
+#Here now H1b(but the codes are h1a)
+#h1a test: compare strict and generalized bridge proportions 
+
+#wave1
+result_1a <- data.frame(grade = 1:29,
+                        strict = rep(NA,29),
+                        gen = rep(NA,29),
+                        estimate = rep(NA,29),
+                        significance = rep(NA,29))
+
+for (i in 1:29){
+  temp_df <- fis_sub_1[which(fis_sub_1$id_g==i),]
+  strict_group <- temp_df[,"prop_s"][[1]]
+  strict_group <- strict_group[is.na(strict_group)==F]
+  gen_group <- temp_df[,"prop_g"][[1]]
+  gen_group <- gen_group[is.na(gen_group)==F]
+  
+  result_1a[i,"strict"] <- mean(strict_group, na.rm=T)
+  result_1a[i,"gen"] <- mean(gen_group, na.rm=T)
+  result_1a[i,"estimate"] <- t.test(strict_group, gen_group, paired=T)$estimate[[1]]
+  result_1a[i,"significance"] <- t.test(strict_group, gen_group, paired=T)$p.value
+}
+
+#wave2
+result_2a <- data.frame(grade = 1:29,
+                        strict = rep(NA,29),
+                        gen = rep(NA,29),
+                        estimate = rep(NA,29),
+                        significance = rep(NA,29))
+
+for (i in 1:29){
+  temp_df <- fis_sub_2[which(fis_sub_2$id_g==i),]
+  strict_group <- temp_df[,"prop_s"][[1]]
+  strict_group <- strict_group[is.na(strict_group)==F]
+  gen_group <- temp_df[,"prop_g"][[1]]
+  gen_group <- gen_group[is.na(gen_group)==F]
+  
+  result_2a[i,"strict"] <- mean(strict_group, na.rm=T)
+  result_2a[i,"gen"] <- mean(gen_group, na.rm=T)
+  result_2a[i,"estimate"] <- t.test(strict_group, gen_group, paired=T)$estimate[[1]]
+  result_2a[i,"significance"] <- t.test(strict_group, gen_group, paired=T)$p.value
+}
+
+#wave3
+result_3a <- data.frame(grade = 1:29,
+                        strict = rep(NA,29),
+                        gen = rep(NA,29),
+                        estimate = rep(NA,29),
+                        significance = rep(NA,29))
+
+for (i in 1:29){
+  temp_df <- fis_sub_3[which(fis_sub_3$id_g==i),]
+  strict_group <- temp_df[,"prop_s"][[1]]
+  strict_group <- strict_group[is.na(strict_group)==F]
+  gen_group <- temp_df[,"prop_g"][[1]]
+  gen_group <- gen_group[is.na(gen_group)==F]
+  
+  result_3a[i,"strict"] <- mean(strict_group, na.rm=T)
+  result_3a[i,"gen"] <- mean(gen_group, na.rm=T)
+  result_3a[i,"estimate"] <- t.test(strict_group, gen_group, paired=T)$estimate[[1]]
+  result_3a[i,"significance"] <- t.test(strict_group, gen_group, paired=T)$p.value
+}
+
+##general comparison
+t.test(result_1a$strict, result_1a$gen,paired=T) #-0.2030504   p-value = 5.512e-08
+t.test(result_2a$strict, result_2a$gen,paired=T) #-0.2618906 p-value = 3.818e-10
+t.test(result_3a$strict, result_3a$gen,paired=T) #-0.2375736  p-value = 4.715e-08
+
+##general table
+h1a_result <- list(result_1a, result_2a, result_3a)
+general_h1a <- data.frame(wave = 1:3,
+                          estimate = 1:3,
+                          significance = 1:3)
+for (i in 1:3){
+  df <- h1a_result[[i]]
+  general_h1a[i,2] <- t.test(df$strict, df$gen,paired=T)$estimate[[1]]
+  general_h1a[i,3] <- t.test(df$strict, df$gen,paired=T)$p.value
+}
+
+
+##conclusion: very strong difference and very counter-intuitive finding!
+#dual identifiers are much more likely to build generalized bridges than strict ones!
+
+
+###visualization and interpretation
+
+##h1a
+##results visualization
+par(family = "serif") #font change as Times New Roman
+# set plot combinations
+par(mfrow = c(3, 1))
+#wave1
+plot(result_1$grade, result_1$dual,type="b",lwd = 1.5,col="#6C8CA0",ylim=c(0,50),
+     main = "wave 1: bridges by different groups", xlab="grade",
+     ylab= " mean of bridges")
+lines(result_1$grade,result_1$mono, type="b",lwd = 1.5,col="#B7CEB3",ylim=c(0,50))
+lines(result_1$grade,result_1$m_major, type="b",lwd = 1.5,col="#FFB6A4",ylim=c(0,50))
+legend("topright", legend = c("Mono", "Dual","M_major"), col = c("#B7CEB3", "#6C8CA0","#FFB6A4"), lty = 1, lwd = 2,cex=0.8)
+
+#wave2
+plot(result_2$grade, result_2$dual,type="b",lwd = 1.5,col="#6C8CA0",ylim=c(0,50),
+     main = "wave 2: bridges by different groups", xlab="grade",
+     ylab= " mean of bridges")
+lines(result_2$grade,result_2$mono, type="b",lwd = 1.5,col="#B7CEB3",ylim=c(0,50))
+lines(result_2$grade,result_2$m_major, type="b",lwd = 1.5,col="#FFB6A4",ylim=c(0,50))
+
+#wave3
+plot(result_3$grade, result_3$dual,type="b",lwd = 1.5,col="#6C8CA0",ylim=c(0,50),
+     main = "wave 3: bridges by different groups", xlab="grade",
+     ylab= " mean of bridges")
+lines(result_3$grade,result_3$mono, type="b",lwd = 1.5,col="#B7CEB3",ylim=c(0,50))
+lines(result_3$grade,result_3$m_major, type="b",lwd = 1.5,col="#FFB6A4",ylim=c(0,50))
+
+
+#h1b
+
+par(family = "serif") #font change as Times New Roman
+# set plot combinations
+par(mfrow = c(3, 1))
+#wave1
+plot(result_1a$grade, result_1a$strict,type="b",lwd = 1.5,col="#6C8CA0",ylim=c(0,1),
+     main = "wave 1: proportions of strict and generalized bridges", xlab="grade",
+     ylab= " proportions of bridges")
+lines(result_1a$grade,result_1a$gen, type="b",lwd = 1.5,col="#B7CEB3",ylim=c(0,1))
+legend("topright", legend = c("Strict", "Generalized"), col = c("#6C8CA0","#B7CEB3"), lty = 1, lwd = 2,cex=0.9)
+
+#wave2
+plot(result_2a$grade, result_2a$strict,type="b",lwd = 1.5,col="#6C8CA0",ylim=c(0,1),
+     main = "wave 2: proportions of strict and generalized bridges", xlab="grade",
+     ylab= " proportions of bridges")
+lines(result_2a$grade,result_2a$gen, type="b",lwd = 1.5,col="#B7CEB3",ylim=c(0,1))
+
+#wave3
+plot(result_3a$grade, result_3a$strict,type="b",lwd = 1.5,col="#6C8CA0",ylim=c(0,1),
+     main = "wave 3: proportions of strict and generalized bridges", xlab="grade",
+     ylab= " proportions of bridges")
+lines(result_3a$grade,result_3a$gen, type="b",lwd = 1.5,col="#B7CEB3",ylim=c(0,1))
+
